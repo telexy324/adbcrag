@@ -44,6 +44,9 @@ func (s *DocumentService) Upload(ctx context.Context, input UploadInput) (*dto.U
 	if err != nil {
 		return nil, err
 	}
+	if err := util.ValidateUploadContent(input.File, ext); err != nil {
+		return nil, err
+	}
 	path, err := util.SaveUploadedFile(input.File, input.FileHeader, s.cfg.LocalFileDir)
 	if err != nil {
 		return nil, err

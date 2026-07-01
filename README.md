@@ -4,7 +4,7 @@
 
 - Golang + Gin + GORM 后端
 - PostgreSQL + pg_trgm 表结构
-- Markdown / TXT 文档上传、解析、切片、检索增强信息入库
+- Markdown / TXT / Word / Excel 文档上传、解析、切片、检索增强信息入库
 - DeepSeek v4 兼容 OpenAI Chat Completions 调用
 - DeepSeek 查询改写、候选片段重排和最终回答
 - 知识库问答与引用来源展示
@@ -55,6 +55,6 @@ http://127.0.0.1:5173
 ## 注意
 
 - 只有 `published` 状态文档会参与问答检索。
-- 当前 MVP 优先支持 `.md` 和 `.txt`。
+- 当前 MVP 支持 `.md`、`.txt`、`.docx`、`.xlsx`。
 - LLM 生成的命令只作为排查建议展示，系统不会执行生产命令。
 - 当前版本不需要 embedding 模型；检索链路使用 DeepSeek 查询改写、PostgreSQL `pg_trgm` 召回、DeepSeek 重排。

@@ -908,14 +908,16 @@ POST {DEEPSEEK_BASE_URL}/chat/completions
 .xlsx
 ```
 
-第一版可以优先实现：
+第一版实现：
 
 ```text
 .txt
 .md
+.docx
+.xlsx
 ```
 
-PDF、Word、Excel 可以预留接口，后续扩展。
+PDF 可以预留接口，后续扩展。
 
 ---
 
@@ -1202,14 +1204,12 @@ export async function askQuestion(data: {
 
 ```text
 1. PDF 解析
-2. Word 解析
-3. Excel 解析
-4. MinIO
-5. 用户登录
-6. 权限管理
-7. 文档版本对比
-8. Wiki 自动同步
-9. 工单系统集成
+2. MinIO
+3. 用户登录
+4. 权限管理
+5. 文档版本对比
+6. Wiki 自动同步
+7. 工单系统集成
 ```
 
 ---
@@ -1283,7 +1283,7 @@ export async function askQuestion(data: {
 验收标准：
 
 ```text
-1. 支持上传 .md 和 .txt
+1. 支持上传 .md、.txt、.docx、.xlsx
 2. 文件保存到本地目录
 3. 创建 kb_document 记录
 4. 返回文档 ID
@@ -1296,7 +1296,7 @@ export async function askQuestion(data: {
 目标：
 
 ```text
-解析 .md 和 .txt 文档，切分为 chunks。
+解析 .md、.txt、.docx、.xlsx 文档，切分为 chunks。
 ```
 
 验收标准：

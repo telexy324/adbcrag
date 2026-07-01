@@ -24,6 +24,10 @@ func (s *ParserService) Parse(path string) (string, error) {
 			return "", err
 		}
 		return util.NormalizeText(string(data)), nil
+	case ".docx":
+		return ParseDOCX(path)
+	case ".xlsx":
+		return ParseXLSX(path)
 	default:
 		return "", fmt.Errorf("parser for %s is not implemented", ext)
 	}

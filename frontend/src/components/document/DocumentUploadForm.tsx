@@ -33,7 +33,7 @@ export function DocumentUploadForm() {
         <form className="grid gap-4" onSubmit={onSubmit}>
           <div className="grid gap-2">
             <label className="text-sm font-medium">文档文件</label>
-            <Input name="file" type="file" accept=".md,.txt" required />
+            <Input name="file" type="file" accept=".md,.txt,.docx,.xlsx" required />
           </div>
           <div className="grid gap-2">
             <label className="text-sm font-medium">文档标题</label>
