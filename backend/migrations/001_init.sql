@@ -1,4 +1,4 @@
-CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE IF NOT EXISTS kb_document (
     id BIGSERIAL PRIMARY KEY,
@@ -31,14 +31,18 @@ CREATE TABLE IF NOT EXISTS kb_chunk (
     source_section VARCHAR(255),
     source_page INT,
     token_count INT DEFAULT 0,
-    embedding VECTOR(1024),
+    search_text TEXT,
+    keywords JSONB,
+    possible_questions JSONB,
     created_at TIMESTAMP DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_kb_document_status ON kb_document(status);
 CREATE INDEX IF NOT EXISTS idx_kb_document_filters ON kb_document(system_name, component_name, doc_type);
 CREATE INDEX IF NOT EXISTS idx_kb_chunk_document_id ON kb_chunk(document_id);
-CREATE INDEX IF NOT EXISTS idx_kb_chunk_embedding ON kb_chunk USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_kb_chunk_content_trgm ON kb_chunk USING gin (content gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_kb_chunk_search_text_trgm ON kb_chunk USING gin (search_text gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_kb_chunk_source_section_trgm ON kb_chunk USING gin (source_section gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS qa_record (
     id BIGSERIAL PRIMARY KEY,

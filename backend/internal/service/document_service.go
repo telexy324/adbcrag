@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"mime/multipart"
 
 	"ops-kb-rag/backend/internal/config"
@@ -12,22 +11,21 @@ import (
 	"ops-kb-rag/backend/internal/repository"
 	"ops-kb-rag/backend/internal/util"
 
-	"github.com/pgvector/pgvector-go"
 	"gorm.io/datatypes"
 )
 
 type DocumentService struct {
-	cfg       *config.Config
-	docs      *repository.DocumentRepository
-	chunks    *repository.ChunkRepository
-	parser    *ParserService
-	chunker   *ChunkService
-	embedding *EmbeddingService
-	quality   *QualityService
+	cfg      *config.Config
+	docs     *repository.DocumentRepository
+	chunks   *repository.ChunkRepository
+	parser   *ParserService
+	chunker  *ChunkService
+	quality  *QualityService
+	metadata *RetrievalMetadataService
 }
 
-func NewDocumentService(cfg *config.Config, docs *repository.DocumentRepository, chunks *repository.ChunkRepository, parser *ParserService, chunker *ChunkService, embedding *EmbeddingService, quality *QualityService) *DocumentService {
-	return &DocumentService{cfg: cfg, docs: docs, chunks: chunks, parser: parser, chunker: chunker, embedding: embedding, quality: quality}
+func NewDocumentService(cfg *config.Config, docs *repository.DocumentRepository, chunks *repository.ChunkRepository, parser *ParserService, chunker *ChunkService, quality *QualityService, metadata *RetrievalMetadataService) *DocumentService {
+	return &DocumentService{cfg: cfg, docs: docs, chunks: chunks, parser: parser, chunker: chunker, quality: quality, metadata: metadata}
 }
 
 type UploadInput struct {
@@ -83,18 +81,17 @@ func (s *DocumentService) Upload(ctx context.Context, input UploadInput) (*dto.U
 	textChunks := s.chunker.Split(doc.Title, content)
 	dbChunks := make([]model.KBChunk, 0, len(textChunks))
 	for _, textChunk := range textChunks {
-		vector, err := s.embedding.Embed(ctx, textChunk.Content)
-		if err != nil {
-			return nil, fmt.Errorf("embed chunk %d: %w", textChunk.Index, err)
-		}
+		_, keywordsJSON, questionsJSON, searchText := s.metadata.Extract(ctx, doc.Title, textChunk.SourceSection, textChunk.Content)
 		dbChunks = append(dbChunks, model.KBChunk{
-			DocumentID:    doc.ID,
-			ChunkIndex:    textChunk.Index,
-			Content:       textChunk.Content,
-			SourceTitle:   textChunk.SourceTitle,
-			SourceSection: textChunk.SourceSection,
-			TokenCount:    textChunk.TokenCount,
-			Embedding:     pgvector.NewVector(vector),
+			DocumentID:        doc.ID,
+			ChunkIndex:        textChunk.Index,
+			Content:           textChunk.Content,
+			SourceTitle:       textChunk.SourceTitle,
+			SourceSection:     textChunk.SourceSection,
+			TokenCount:        textChunk.TokenCount,
+			SearchText:        searchText,
+			Keywords:          datatypes.JSON(keywordsJSON),
+			PossibleQuestions: datatypes.JSON(questionsJSON),
 		})
 	}
 	if err := s.chunks.CreateBatch(ctx, dbChunks); err != nil {

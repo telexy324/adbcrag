@@ -31,20 +31,27 @@
 * Gin Web Framework
 * GORM
 * PostgreSQL
-* pgvector
+* pg_trgm
 * MinIO 或本地文件存储
 * 内网 DeepSeek v4 LLM 模型
 
-### 向量模型
+### 检索策略
 
-优先使用内网可用的 Embedding 模型。
+当前环境只有 DeepSeek v4 LLM，没有独立 embedding 模型。
 
-如果 DeepSeek v4 只提供聊天能力，不提供 embedding 能力，需要单独接入内网 embedding 模型，例如：
+因此第一阶段不使用 pgvector / embedding，改用以下方案尽量接近 RAG 效果：
 
-* bge-m3
-* bge-large-zh
-* text2vec
-* m3e
+1. 文档切片后，调用 DeepSeek 为每个 chunk 生成检索增强信息：
+   - 摘要 summary
+   - 关键词 keywords
+   - 用户可能提出的问题 possible_questions
+2. 使用 PostgreSQL `pg_trgm` 对 `content`、`source_section`、`search_text` 做文本相似度召回。
+3. 用户提问时，先调用 DeepSeek 做查询改写和关键词抽取。
+4. 数据库召回 TopN 候选片段。
+5. 再调用 DeepSeek 对候选片段重排，选出 TopK。
+6. 最后调用 DeepSeek 基于 TopK 片段生成答案并展示引用来源。
+
+后续如果接入内网 embedding 模型，可以把检索层替换为 pgvector，RAG 回答层不需要大改。
 
 ---
 
@@ -55,7 +62,7 @@
 1. 文档上传
 2. 文档解析
 3. 文档切片
-4. 文档向量化
+4. 检索增强信息生成
 5. 文档入库
 6. 知识库检索
 7. LLM 问答
@@ -89,9 +96,9 @@ AI 检查文档质量
     ↓
 切分为多个 chunk
     ↓
-生成 embedding
+调用 DeepSeek 生成 chunk 摘要、关键词、可能问题
     ↓
-写入 PostgreSQL + pgvector
+写入 PostgreSQL，并使用 pg_trgm 建立文本检索索引
     ↓
 文档状态变为：待审核
     ↓
@@ -109,11 +116,13 @@ AI 检查文档质量
 ```text
 用户输入问题
     ↓
-问题向量化
+DeepSeek 查询改写和关键词抽取
     ↓
-从 pgvector 检索 TopK 文档片段
+PostgreSQL pg_trgm 召回 TopN 文档片段
     ↓
-按相似度和文档状态过滤
+按文档状态、系统、组件、文档类型过滤
+    ↓
+DeepSeek 对候选片段重排，选出 TopK
     ↓
 组装 Prompt
     ↓
@@ -151,10 +160,10 @@ published
 
 ### 6.1 PostgreSQL 扩展
 
-需要启用 pgvector：
+需要启用 `pg_trgm`，用于中文运维文档的近似文本检索：
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
 ---
@@ -206,8 +215,6 @@ quality_result AI 质检结果 JSON
 
 ### 6.3 文档片段表
 
-如果 embedding 维度是 1024：
-
 ```sql
 CREATE TABLE kb_chunk (
     id BIGSERIAL PRIMARY KEY,
@@ -222,18 +229,20 @@ CREATE TABLE kb_chunk (
 
     token_count INT DEFAULT 0,
 
-    embedding VECTOR(1024),
+    search_text TEXT,
+    keywords JSONB,
+    possible_questions JSONB,
 
     created_at TIMESTAMP DEFAULT now()
 );
 ```
 
-如果 embedding 维度不是 1024，需要根据实际模型调整：
+字段说明：
 
-```sql
-embedding VECTOR(768)
-embedding VECTOR(1024)
-embedding VECTOR(1536)
+```text
+search_text          检索增强文本，由标题、章节、摘要、关键词、可能问题、正文组合而成
+keywords             DeepSeek 从 chunk 中抽取的关键词 JSON
+possible_questions   DeepSeek 生成的用户可能问题 JSON
 ```
 
 ---
@@ -312,10 +321,9 @@ backend/
       document_service.go
       parser_service.go
       chunk_service.go
-      embedding_service.go
-      llm_service.go
       rag_service.go
       quality_service.go
+      retrieval_metadata_service.go
       review_service.go
 
     repository/
@@ -325,7 +333,6 @@ backend/
 
     client/
       deepseek_client.go
-      embedding_client.go
 
     dto/
       document_dto.go
@@ -421,13 +428,8 @@ DEEPSEEK_BASE_URL=http://deepseek-v4.internal.local/v1
 DEEPSEEK_API_KEY=local-key
 DEEPSEEK_MODEL=deepseek-v4
 
-EMBEDDING_BASE_URL=http://embedding.internal.local/v1
-EMBEDDING_API_KEY=local-key
-EMBEDDING_MODEL=bge-m3
-EMBEDDING_DIM=1024
-
 RAG_TOP_K=5
-RAG_MIN_SCORE=0.3
+RAG_RECALL_K=30
 ```
 
 说明：
@@ -678,9 +680,18 @@ doc_type = ?
 topK = 5
 ```
 
-### 12.3 相似度
+### 12.3 召回和重排
 
-使用 pgvector cosine distance。
+第一阶段没有 embedding 模型，因此不使用向量相似度。
+
+检索流程：
+
+```text
+1. DeepSeek 将用户问题改写为 query，并抽取 keywords
+2. PostgreSQL 使用 pg_trgm 从 content、source_section、search_text 召回 TopN
+3. DeepSeek 对 TopN 候选片段重排
+4. 取 TopK 进入最终 RAG Prompt
+```
 
 示例 SQL：
 
@@ -694,11 +705,22 @@ SELECT
     d.system_name,
     d.component_name,
     d.doc_type,
-    1 - (c.embedding <=> $1) AS score
+    GREATEST(
+        similarity(c.content, $1),
+        similarity(COALESCE(c.search_text, ''), $1),
+        similarity(COALESCE(c.source_section, ''), $1),
+        similarity(d.title, $1)
+    ) AS score
 FROM kb_chunk c
 JOIN kb_document d ON c.document_id = d.id
 WHERE d.status = 'published'
-ORDER BY c.embedding <=> $1
+  AND (
+      c.content ILIKE '%' || $1 || '%'
+      OR COALESCE(c.search_text, '') ILIKE '%' || $1 || '%'
+      OR COALESCE(c.source_section, '') ILIKE '%' || $1 || '%'
+      OR d.title ILIKE '%' || $1 || '%'
+  )
+ORDER BY score DESC
 LIMIT $2;
 ```
 
@@ -841,26 +863,16 @@ POST {DEEPSEEK_BASE_URL}/chat/completions
 
 ---
 
-### 14.2 Embedding 接口
+### 14.2 LLM 用途
 
-实现文件：
+由于当前只有 DeepSeek v4 LLM，后端需要复用同一个 Chat 接口完成：
 
 ```text
-backend/internal/client/embedding_client.go
-```
-
-需要提供方法：
-
-```go
-type EmbeddingClient interface {
-    Embed(ctx context.Context, text string) ([]float32, error)
-}
-```
-
-如果 embedding 接口 OpenAI 兼容，请调用：
-
-```http
-POST {EMBEDDING_BASE_URL}/embeddings
+1. 文档质量检查
+2. chunk 检索增强信息生成
+3. 用户问题查询改写和关键词抽取
+4. 候选 chunk 重排
+5. 最终 RAG 回答生成
 ```
 
 ---
@@ -877,7 +889,7 @@ POST {EMBEDDING_BASE_URL}/embeddings
 3. 调用 ParserService 解析文本
 4. 调用 QualityService 质检
 5. 调用 ChunkService 切片
-6. 调用 EmbeddingService 生成向量
+6. 调用 RetrievalMetadataService 生成检索增强信息
 7. 保存 chunk
 8. 更新文档状态
 ```
@@ -927,17 +939,29 @@ PDF、Word、Excel 可以预留接口，后续扩展。
 
 ```text
 1. 接收用户问题
-2. 对问题生成向量
-3. 检索相关 chunk
-4. 组装 Prompt
-5. 调用 LLM
-6. 保存问答记录
-7. 返回答案和引用来源
+2. 调用 DeepSeek 做查询改写和关键词抽取
+3. 使用 pg_trgm 召回候选 chunk
+4. 调用 DeepSeek 对候选 chunk 重排
+5. 组装 Prompt
+6. 调用 DeepSeek 生成答案
+7. 保存问答记录
+8. 返回答案和引用来源
 ```
 
 ---
 
-### 15.5 QualityService
+### 15.5 RetrievalMetadataService
+
+负责：
+
+```text
+1. 接收 chunk 内容
+2. 调用 DeepSeek 生成摘要、关键词、可能问题
+3. 生成 search_text
+4. 写入 kb_chunk 的 search_text、keywords、possible_questions 字段
+```
+
+### 15.6 QualityService
 
 负责：
 
@@ -1164,10 +1188,10 @@ export async function askQuestion(data: {
 ```text
 1. React + shadcn/ui 前端基础页面
 2. Golang + Gin 后端服务
-3. PostgreSQL + pgvector 表结构
+3. PostgreSQL + pg_trgm 表结构
 4. Markdown / TXT 文档上传
 5. 文档切片
-6. Embedding 入库
+6. 检索增强信息入库
 7. 知识库问答
 8. DeepSeek v4 调用
 9. 引用来源展示
@@ -1286,20 +1310,20 @@ export async function askQuestion(data: {
 
 ---
 
-### Task 6：Embedding 入库
+### Task 6：检索增强信息入库
 
 目标：
 
 ```text
-调用 embedding 模型生成向量，写入 kb_chunk。
+调用 DeepSeek 为每个 chunk 生成摘要、关键词、可能问题，并写入 kb_chunk。
 ```
 
 验收标准：
 
 ```text
-1. 每个 chunk 都有 embedding
-2. embedding 维度与 EMBEDDING_DIM 一致
-3. pgvector 可以正常保存
+1. 每个 chunk 都有 search_text
+2. keywords、possible_questions 可以正常保存为 JSONB
+3. pg_trgm 索引可以正常执行文本召回
 ```
 
 ---
@@ -1333,11 +1357,12 @@ export async function askQuestion(data: {
 验收标准：
 
 ```text
-1. 用户问题可以生成 embedding
-2. 可以检索 TopK chunks
-3. 可以组装 Prompt
-4. 可以调用 DeepSeek v4
-5. 返回 answer 和 citations
+1. 用户问题可以通过 DeepSeek 改写和抽取关键词
+2. 可以用 pg_trgm 召回候选 chunks
+3. 可以调用 DeepSeek 重排候选 chunks
+4. 可以组装 Prompt
+5. 可以调用 DeepSeek v4
+6. 返回 answer 和 citations
 ```
 
 ---
@@ -1439,7 +1464,7 @@ export async function askQuestion(data: {
 ```text
 1. 启动前端和后端
 2. 上传一篇 Markdown 运维手册
-3. 系统自动解析、切片、向量化、入库
+3. 系统自动解析、切片、生成检索增强信息并入库
 4. 审核发布文档
 5. 用户在问答页面提问
 6. 系统检索知识库

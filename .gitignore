@@ -5,3 +5,4 @@ frontend/tsconfig.tsbuildinfo
 .pnpm-store/
 .env
 backend/.env
+.idea
