@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ops-kb-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ops_kb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ops_kb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    image: ops-kb-rag-backend:latest
+    container_name: ops-kb-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: prod
+      APP_PORT: "8080"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: ops_kb
+      DB_SSLMODE: disable
+      FILE_STORAGE_TYPE: local
+      LOCAL_FILE_DIR: /app/data/uploads
+      MAX_UPLOAD_MB: "50"
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-http://deepseek-v4.internal.local/v1}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-local-key}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_RECALL_K: ${RAG_RECALL_K:-30}
+    ports:
+      - "8080:8080"
+    volumes:
+      - backend_uploads:/app/data/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+    image: ops-kb-rag-frontend:latest
+    container_name: ops-kb-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres_data:
+  backend_uploads:

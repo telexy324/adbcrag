@@ -52,6 +52,27 @@ pnpm dev
 http://127.0.0.1:5173
 ```
 
+## Docker Compose 启动
+
+```bash
+export DEEPSEEK_BASE_URL=http://deepseek-v4.internal.local/v1
+export DEEPSEEK_API_KEY=local-key
+export DEEPSEEK_MODEL=deepseek-v4
+docker compose up --build
+```
+
+默认访问：
+
+```text
+http://127.0.0.1:5173
+```
+
+Compose 会启动：
+
+- `frontend`：nginx 托管前端，并将 `/api` 反代到后端
+- `backend`：Golang API 服务
+- `postgres`：PostgreSQL 16，数据持久化到 `postgres_data`
+
 ## 注意
 
 - 只有 `published` 状态文档会参与问答检索。
