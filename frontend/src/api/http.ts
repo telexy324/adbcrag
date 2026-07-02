@@ -6,9 +6,11 @@ export type APIResponse<T> = {
   data: T
 }
 
+const apiTimeoutMs = Number(import.meta.env.VITE_API_TIMEOUT_MS || 120000)
+
 export const http = axios.create({
   baseURL: '/api',
-  timeout: 120000,
+  timeout: apiTimeoutMs,
 })
 
 http.interceptors.response.use((response) => {

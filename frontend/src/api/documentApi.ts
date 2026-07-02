@@ -1,5 +1,7 @@
 import { http, type APIResponse } from './http'
 
+const uploadTimeoutMs = Number(import.meta.env.VITE_UPLOAD_TIMEOUT_MS || 600000)
+
 export type DocumentItem = {
   id: number
   title: string
@@ -12,7 +14,9 @@ export type DocumentItem = {
 }
 
 export async function uploadDocument(formData: FormData) {
-  const { data } = await http.post<APIResponse<any>>('/documents/upload', formData)
+  const { data } = await http.post<APIResponse<any>>('/documents/upload', formData, {
+    timeout: uploadTimeoutMs,
+  })
   return data.data
 }
 

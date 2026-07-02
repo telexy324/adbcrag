@@ -49,10 +49,16 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        VITE_API_TIMEOUT_MS: ${VITE_API_TIMEOUT_MS:-120000}
+        VITE_UPLOAD_TIMEOUT_MS: ${VITE_UPLOAD_TIMEOUT_MS:-600000}
     image: ops-kb-rag-frontend:latest
     container_name: ops-kb-frontend
     depends_on:
       - backend
+    environment:
+      API_PROXY_READ_TIMEOUT: ${API_PROXY_READ_TIMEOUT:-600s}
+      API_PROXY_SEND_TIMEOUT: ${API_PROXY_SEND_TIMEOUT:-600s}
     ports:
       - "5173:80"
 

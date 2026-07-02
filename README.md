@@ -58,6 +58,8 @@ http://127.0.0.1:5173
 export DEEPSEEK_BASE_URL=http://deepseek-v4.internal.local/v1
 export DEEPSEEK_API_KEY=local-key
 export DEEPSEEK_MODEL=deepseek-v4
+export VITE_UPLOAD_TIMEOUT_MS=600000
+export API_PROXY_READ_TIMEOUT=600s
 docker compose up --build
 ```
 
@@ -72,6 +74,12 @@ Compose 会启动：
 - `frontend`：nginx 托管前端，并将 `/api` 反代到后端
 - `backend`：Golang API 服务
 - `postgres`：PostgreSQL 16，数据持久化到 `postgres_data`
+
+上传接口耗时较长时，可以调整：
+
+```bash
+VITE_UPLOAD_TIMEOUT_MS=900000 API_PROXY_READ_TIMEOUT=900s docker compose up --build
+```
 
 ## 注意
 
