@@ -2,6 +2,7 @@ package handler
 
 import (
 	"strconv"
+	"strings"
 
 	"ops-kb-rag/backend/internal/dto"
 	"ops-kb-rag/backend/internal/repository"
@@ -31,10 +32,31 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 		CreatedBy: c.GetHeader("X-User"),
 	})
 	if err != nil {
-		dto.Error(c, 500, err.Error())
+		dto.Error(c, uploadErrorStatus(err), err.Error())
 		return
 	}
 	dto.Success(c, result)
+}
+
+func uploadErrorStatus(err error) int {
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"unsupported file type",
+		"file size exceeds",
+		"legacy .doc parsing is not supported",
+		"office parser",
+		"invalid .docx",
+		"not a valid office",
+		"corrupted",
+		"incompletely uploaded",
+		"checksum error",
+		"parser for",
+	} {
+		if strings.Contains(message, marker) {
+			return 400
+		}
+	}
+	return 500
 }
 
 func (h *DocumentHandler) List(c *gin.Context) {

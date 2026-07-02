@@ -13,7 +13,7 @@ type fakeMultipartFile struct {
 func (f fakeMultipartFile) Close() error { return nil }
 
 func TestValidateUploadSupportsOfficeFiles(t *testing.T) {
-	for _, name := range []string{"manual.md", "manual.txt", "manual.docx", "manual.xlsx", "MANUAL.DOCX"} {
+	for _, name := range []string{"manual.md", "manual.txt", "manual.doc", "manual.docx", "manual.xls", "manual.xlsx", "MANUAL.DOCX"} {
 		t.Run(name, func(t *testing.T) {
 			ext, err := ValidateUpload(&multipart.FileHeader{Filename: name, Size: 1024}, 50)
 			if err != nil {
@@ -26,18 +26,8 @@ func TestValidateUploadSupportsOfficeFiles(t *testing.T) {
 	}
 }
 
-func TestValidateUploadContentRejectsRenamedDoc(t *testing.T) {
+func TestValidateUploadContentDefersOfficeValidationToParser(t *testing.T) {
 	err := ValidateUploadContent(fakeMultipartFile{Reader: strings.NewReader("not a zip")}, ".docx")
-	if err == nil {
-		t.Fatal("expected invalid docx error")
-	}
-	if !strings.Contains(err.Error(), "not a valid Office Open XML file") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateUploadContentAcceptsOfficeZipHeader(t *testing.T) {
-	err := ValidateUploadContent(fakeMultipartFile{Reader: strings.NewReader("PK\x03\x04payload")}, ".docx")
 	if err != nil {
 		t.Fatal(err)
 	}

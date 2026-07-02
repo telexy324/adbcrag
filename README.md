@@ -55,6 +55,6 @@ http://127.0.0.1:5173
 ## 注意
 
 - 只有 `published` 状态文档会参与问答检索。
-- 当前 MVP 支持 `.md`、`.txt`、`.docx`、`.xlsx`。
+- 当前 MVP 支持上传 `.md`、`.txt`、`.doc`、`.docx`、`.xls`、`.xlsx`；`.docx/.xlsx/.xls` 通过 Go 库解析文本后送入 LLM 处理链路，`.doc` 会提示先转换为 `.docx`。
 - LLM 生成的命令只作为排查建议展示，系统不会执行生产命令。
 - 当前版本不需要 embedding 模型；检索链路使用 DeepSeek 查询改写、PostgreSQL `pg_trgm` 召回、DeepSeek 重排。

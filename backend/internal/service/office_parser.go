@@ -6,28 +6,82 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
-	"sort"
-	"strconv"
+	"path/filepath"
 	"strings"
 
 	"ops-kb-rag/backend/internal/util"
+
+	"github.com/extrame/xls"
+	docx "github.com/fumiama/go-docx"
+	"github.com/xuri/excelize/v2"
 )
 
+func ParseOfficeFile(filePath string) (string, error) {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".docx":
+		return ParseDOCX(filePath)
+	case ".xlsx":
+		return ParseXLSX(filePath)
+	case ".xls":
+		return ParseXLS(filePath)
+	case ".doc":
+		return "", fmt.Errorf("legacy .doc parsing is not supported by the Go library parser; please upload .docx or convert the file before uploading")
+	default:
+		return "", fmt.Errorf("office parser for %s is not implemented", filepath.Ext(filePath))
+	}
+}
+
 func ParseDOCX(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	doc, err := docx.Parse(file, info.Size())
+	if err != nil {
+		if isZipChecksumError(err) {
+			return ParseDOCXLenient(filePath)
+		}
+		return "", friendlyOfficeParseError(".docx", err)
+	}
+
+	var parts []string
+	for _, item := range doc.Document.Body.Items {
+		switch typed := item.(type) {
+		case *docx.Paragraph:
+			if text := strings.TrimSpace(typed.String()); text != "" {
+				parts = append(parts, text)
+			}
+		case *docx.Table:
+			if text := strings.TrimSpace(typed.String()); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return normalizedOfficeText(strings.Join(parts, "\n\n"), filePath)
+}
+
+func ParseDOCXLenient(filePath string) (string, error) {
 	reader, err := zip.OpenReader(filePath)
 	if err != nil {
-		return "", friendlyOfficeZipError(".docx", err)
+		return "", friendlyOfficeParseError(".docx", err)
 	}
 	defer reader.Close()
 
 	file := findZipFile(reader.File, "word/document.xml")
 	if file == nil {
-		return "", fmt.Errorf("docx missing word/document.xml")
+		return "", fmt.Errorf("invalid .docx file: missing word/document.xml")
 	}
 	rc, err := file.Open()
 	if err != nil {
-		return "", err
+		return "", friendlyOfficeParseError(".docx", err)
 	}
 	defer rc.Close()
 
@@ -41,7 +95,10 @@ func ParseDOCX(filePath string) (string, error) {
 			break
 		}
 		if err != nil {
-			return "", err
+			if isZipChecksumError(err) && (len(paragraphs) > 0 || strings.TrimSpace(current.String()) != "") {
+				break
+			}
+			return "", friendlyOfficeParseError(".docx", err)
 		}
 		switch item := token.(type) {
 		case xml.StartElement:
@@ -73,276 +130,99 @@ func ParseDOCX(filePath string) (string, error) {
 	if tail := strings.TrimSpace(current.String()); tail != "" {
 		paragraphs = append(paragraphs, tail)
 	}
-	return util.NormalizeText(strings.Join(paragraphs, "\n\n")), nil
+	return normalizedOfficeText(strings.Join(paragraphs, "\n\n"), filePath)
 }
 
 func ParseXLSX(filePath string) (string, error) {
-	reader, err := zip.OpenReader(filePath)
+	file, err := excelize.OpenFile(filePath)
 	if err != nil {
-		return "", friendlyOfficeZipError(".xlsx", err)
+		return "", friendlyOfficeParseError(".xlsx", err)
 	}
-	defer reader.Close()
+	defer file.Close()
 
-	sharedStrings, err := parseSharedStrings(reader.File)
+	var doc strings.Builder
+	for _, sheetName := range file.GetSheetList() {
+		rows, err := file.GetRows(sheetName)
+		if err != nil {
+			return "", friendlyOfficeParseError(".xlsx", err)
+		}
+		writeSheetText(&doc, sheetName, rows)
+	}
+	return normalizedOfficeText(doc.String(), filePath)
+}
+
+func ParseXLS(filePath string) (string, error) {
+	workbook, err := xls.Open(filePath, "utf-8")
 	if err != nil {
-		return "", err
-	}
-	sheets := parseWorkbookSheets(reader.File)
-	if len(sheets) == 0 {
-		sheets = fallbackWorksheetFiles(reader.File)
-	}
-	if len(sheets) == 0 {
-		return "", fmt.Errorf("xlsx has no worksheets")
+		return "", friendlyOfficeParseError(".xls", err)
 	}
 
 	var doc strings.Builder
-	for _, sheet := range sheets {
-		rows, err := parseWorksheet(reader.File, sheet.Path, sharedStrings)
-		if err != nil {
-			return "", err
-		}
-		if len(rows) == 0 {
+	for i := 0; i < workbook.NumSheets(); i++ {
+		sheet := workbook.GetSheet(i)
+		if sheet == nil {
 			continue
 		}
-		if doc.Len() > 0 {
-			doc.WriteString("\n\n")
+		var rows [][]string
+		for rowIndex := 0; rowIndex <= int(sheet.MaxRow); rowIndex++ {
+			row := safeXLSRow(sheet, rowIndex)
+			if row == nil {
+				continue
+			}
+			var cells []string
+			for colIndex := row.FirstCol(); colIndex < row.LastCol(); colIndex++ {
+				cells = append(cells, row.Col(colIndex))
+			}
+			rows = append(rows, cells)
 		}
-		doc.WriteString("# ")
-		doc.WriteString(sheet.Name)
+		writeSheetText(&doc, sheet.Name, rows)
+	}
+	return normalizedOfficeText(doc.String(), filePath)
+}
+
+func safeXLSRow(sheet *xls.WorkSheet, rowIndex int) (row *xls.Row) {
+	defer func() {
+		if recover() != nil {
+			row = nil
+		}
+	}()
+	return sheet.Row(rowIndex)
+}
+
+func writeSheetText(doc *strings.Builder, sheetName string, rows [][]string) {
+	var renderedRows []string
+	for _, row := range rows {
+		rendered := strings.TrimSpace(strings.Join(trimTrailingEmptyCells(row), "\t"))
+		if rendered != "" {
+			renderedRows = append(renderedRows, rendered)
+		}
+	}
+	if len(renderedRows) == 0 {
+		return
+	}
+	if doc.Len() > 0 {
 		doc.WriteString("\n\n")
-		doc.WriteString(strings.Join(rows, "\n"))
 	}
-	return util.NormalizeText(doc.String()), nil
+	doc.WriteString("# ")
+	doc.WriteString(sheetName)
+	doc.WriteString("\n\n")
+	doc.WriteString(strings.Join(renderedRows, "\n"))
 }
 
-type workbookSheet struct {
-	Name string
-	Path string
-}
-
-func parseSharedStrings(files []*zip.File) ([]string, error) {
-	file := findZipFile(files, "xl/sharedStrings.xml")
-	if file == nil {
-		return nil, nil
-	}
-	rc, err := file.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-
-	decoder := xml.NewDecoder(rc)
-	var values []string
-	var current strings.Builder
-	inSI := false
-	inText := false
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch item := token.(type) {
-		case xml.StartElement:
-			if item.Name.Local == "si" {
-				inSI = true
-				current.Reset()
-			}
-			if inSI && item.Name.Local == "t" {
-				inText = true
-			}
-		case xml.CharData:
-			if inSI && inText {
-				current.Write([]byte(item))
-			}
-		case xml.EndElement:
-			if item.Name.Local == "t" {
-				inText = false
-			}
-			if item.Name.Local == "si" {
-				values = append(values, current.String())
-				inSI = false
-			}
-		}
-	}
-	return values, nil
-}
-
-func parseWorkbookSheets(files []*zip.File) []workbookSheet {
-	rels := parseWorkbookRelationships(files)
-	file := findZipFile(files, "xl/workbook.xml")
-	if file == nil {
-		return nil
-	}
-	rc, err := file.Open()
-	if err != nil {
-		return nil
-	}
-	defer rc.Close()
-
-	decoder := xml.NewDecoder(rc)
-	var sheets []workbookSheet
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil
-		}
-		start, ok := token.(xml.StartElement)
-		if !ok || start.Name.Local != "sheet" {
-			continue
-		}
-		name := attrValue(start, "name")
-		if name == "" {
-			name = fmt.Sprintf("Sheet%d", len(sheets)+1)
-		}
-		relID := attrValue(start, "id")
-		target := rels[relID]
-		if target == "" {
-			continue
-		}
-		sheets = append(sheets, workbookSheet{Name: name, Path: resolveWorkbookTarget(target)})
-	}
-	return sheets
-}
-
-func parseWorkbookRelationships(files []*zip.File) map[string]string {
-	result := map[string]string{}
-	file := findZipFile(files, "xl/_rels/workbook.xml.rels")
-	if file == nil {
-		return result
-	}
-	rc, err := file.Open()
-	if err != nil {
-		return result
-	}
-	defer rc.Close()
-
-	decoder := xml.NewDecoder(rc)
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return result
-		}
-		start, ok := token.(xml.StartElement)
-		if !ok || start.Name.Local != "Relationship" {
-			continue
-		}
-		id := attrValue(start, "Id")
-		target := attrValue(start, "Target")
-		if id != "" && target != "" {
-			result[id] = target
-		}
-	}
-	return result
-}
-
-func fallbackWorksheetFiles(files []*zip.File) []workbookSheet {
-	var names []string
-	for _, file := range files {
-		if strings.HasPrefix(file.Name, "xl/worksheets/") && strings.HasSuffix(file.Name, ".xml") {
-			names = append(names, file.Name)
-		}
-	}
-	sort.Strings(names)
-	sheets := make([]workbookSheet, 0, len(names))
-	for i, name := range names {
-		sheets = append(sheets, workbookSheet{Name: fmt.Sprintf("Sheet%d", i+1), Path: name})
-	}
-	return sheets
-}
-
-func parseWorksheet(files []*zip.File, sheetPath string, sharedStrings []string) ([]string, error) {
-	file := findZipFile(files, sheetPath)
-	if file == nil {
-		return nil, fmt.Errorf("xlsx missing worksheet %s", sheetPath)
-	}
-	rc, err := file.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-
-	decoder := xml.NewDecoder(rc)
-	var rows []string
-	var cells []string
-	var current strings.Builder
-	var cellType string
-	inValue := false
-	inInlineText := false
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch item := token.(type) {
-		case xml.StartElement:
-			switch item.Name.Local {
-			case "row":
-				cells = nil
-			case "c":
-				cellType = attrValue(item, "t")
-				current.Reset()
-			case "v":
-				inValue = true
-			case "t":
-				if cellType == "inlineStr" || cellType == "str" {
-					inInlineText = true
-				}
-			}
-		case xml.CharData:
-			if inValue || inInlineText {
-				current.Write([]byte(item))
-			}
-		case xml.EndElement:
-			switch item.Name.Local {
-			case "v":
-				inValue = false
-			case "t":
-				inInlineText = false
-			case "c":
-				cells = append(cells, resolveCellValue(strings.TrimSpace(current.String()), cellType, sharedStrings))
-				current.Reset()
-			case "row":
-				row := strings.TrimSpace(strings.Join(trimTrailingEmpty(cells), "\t"))
-				if row != "" {
-					rows = append(rows, row)
-				}
-			}
-		}
-	}
-	return rows, nil
-}
-
-func resolveCellValue(raw, cellType string, sharedStrings []string) string {
-	if raw == "" {
-		return ""
-	}
-	if cellType == "s" {
-		index, err := strconv.Atoi(raw)
-		if err == nil && index >= 0 && index < len(sharedStrings) {
-			return sharedStrings[index]
-		}
-	}
-	return raw
-}
-
-func trimTrailingEmpty(values []string) []string {
-	end := len(values)
-	for end > 0 && strings.TrimSpace(values[end-1]) == "" {
+func trimTrailingEmptyCells(cells []string) []string {
+	end := len(cells)
+	for end > 0 && strings.TrimSpace(cells[end-1]) == "" {
 		end--
 	}
-	return values[:end]
+	return cells[:end]
+}
+
+func normalizedOfficeText(text, filePath string) (string, error) {
+	text = util.NormalizeText(text)
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("office parser produced empty text for %s", filepath.Base(filePath))
+	}
+	return text, nil
 }
 
 func findZipFile(files []*zip.File, name string) *zip.File {
@@ -355,26 +235,16 @@ func findZipFile(files []*zip.File, name string) *zip.File {
 	return nil
 }
 
-func resolveWorkbookTarget(target string) string {
-	target = strings.TrimPrefix(target, "/")
-	if strings.HasPrefix(target, "xl/") {
-		return path.Clean(target)
+func friendlyOfficeParseError(ext string, err error) error {
+	if isZipChecksumError(err) {
+		return fmt.Errorf("%s file appears to be corrupted or incompletely uploaded: %w", ext, err)
 	}
-	return path.Clean("xl/" + target)
-}
-
-func attrValue(start xml.StartElement, localName string) string {
-	for _, attr := range start.Attr {
-		if attr.Name.Local == localName {
-			return attr.Value
-		}
-	}
-	return ""
-}
-
-func friendlyOfficeZipError(ext string, err error) error {
 	if errors.Is(err, zip.ErrFormat) {
-		return fmt.Errorf("%s is not a valid Office Open XML file; please upload a real %s file, not .doc/.xls renamed to %s or an encrypted/corrupted file", ext, ext, ext)
+		return fmt.Errorf("%s file is not a valid Office document; please upload a real %s file, not a renamed or encrypted/corrupted file", ext, ext)
 	}
 	return err
+}
+
+func isZipChecksumError(err error) bool {
+	return errors.Is(err, zip.ErrChecksum) || strings.Contains(strings.ToLower(err.Error()), "checksum error")
 }

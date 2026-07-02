@@ -904,7 +904,9 @@ POST {DEEPSEEK_BASE_URL}/chat/completions
 .txt
 .md
 .pdf
+.doc
 .docx
+.xls
 .xlsx
 ```
 
@@ -913,11 +915,13 @@ POST {DEEPSEEK_BASE_URL}/chat/completions
 ```text
 .txt
 .md
+.doc
 .docx
+.xls
 .xlsx
 ```
 
-PDF 可以预留接口，后续扩展。
+Office 文件优先通过 Go 库解析文本，不直接手写压缩包 XML 解析逻辑；`.docx/.xlsx/.xls` 支持解析，`.doc` 老二进制 Word 文件会提示先转换为 `.docx`。PDF 可以预留接口，后续扩展。
 
 ---
 
@@ -1283,7 +1287,7 @@ export async function askQuestion(data: {
 验收标准：
 
 ```text
-1. 支持上传 .md、.txt、.docx、.xlsx
+1. 支持上传 .md、.txt、.doc、.docx、.xls、.xlsx
 2. 文件保存到本地目录
 3. 创建 kb_document 记录
 4. 返回文档 ID
@@ -1296,7 +1300,7 @@ export async function askQuestion(data: {
 目标：
 
 ```text
-解析 .md、.txt、.docx、.xlsx 文档，切分为 chunks。
+解析 .md、.txt、.doc、.docx、.xls、.xlsx 文档，切分为 chunks。
 ```
 
 验收标准：

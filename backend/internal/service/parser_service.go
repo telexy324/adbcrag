@@ -9,7 +9,8 @@ import (
 	"ops-kb-rag/backend/internal/util"
 )
 
-type ParserService struct{}
+type ParserService struct {
+}
 
 func NewParserService() *ParserService {
 	return &ParserService{}
@@ -24,10 +25,8 @@ func (s *ParserService) Parse(path string) (string, error) {
 			return "", err
 		}
 		return util.NormalizeText(string(data)), nil
-	case ".docx":
-		return ParseDOCX(path)
-	case ".xlsx":
-		return ParseXLSX(path)
+	case ".doc", ".docx", ".xls", ".xlsx":
+		return ParseOfficeFile(path)
 	default:
 		return "", fmt.Errorf("parser for %s is not implemented", ext)
 	}
