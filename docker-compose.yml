@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16
     container_name: ops-kb-postgres
     environment:
       POSTGRES_USER: postgres
@@ -15,6 +15,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - backend_net
 
   backend:
     build:
@@ -36,6 +38,7 @@ services:
       FILE_STORAGE_TYPE: local
       LOCAL_FILE_DIR: /app/data/uploads
       MAX_UPLOAD_MB: "50"
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-http://deepseek-v4.internal.local/v1}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-local-key}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4}
@@ -45,6 +48,8 @@ services:
       - "8080:8080"
     volumes:
       - backend_uploads:/app/data/uploads
+    networks:
+      - backend_net
 
   frontend:
     build:
@@ -61,7 +66,13 @@ services:
       API_PROXY_SEND_TIMEOUT: ${API_PROXY_SEND_TIMEOUT:-600s}
     ports:
       - "5173:80"
+    networks:
+      - backend_net
 
 volumes:
   postgres_data:
   backend_uploads:
+
+networks:
+  backend_net:
+    driver: bridge

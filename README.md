@@ -60,6 +60,7 @@ export DEEPSEEK_API_KEY=local-key
 export DEEPSEEK_MODEL=deepseek-v4
 export VITE_UPLOAD_TIMEOUT_MS=600000
 export API_PROXY_READ_TIMEOUT=600s
+export CORS_ALLOW_ORIGINS='*'
 docker compose up --build
 ```
 

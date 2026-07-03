@@ -3,6 +3,7 @@ FROM node:22-alpine AS builder
 WORKDIR /src
 
 RUN corepack enable
+RUN corepack prepare pnpm@10.10.0 --activate
 
 ARG VITE_API_TIMEOUT_MS=120000
 ARG VITE_UPLOAD_TIMEOUT_MS=600000
