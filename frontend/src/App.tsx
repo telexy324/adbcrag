@@ -7,6 +7,7 @@ import { DocumentListPage } from './pages/DocumentListPage'
 import { DocumentUploadPage } from './pages/DocumentUploadPage'
 import { LogAnalysisPage } from './pages/LogAnalysisPage'
 import { LogSourcePage } from './pages/LogSourcePage'
+import { LLMConfigPage } from './pages/LLMConfigPage'
 import { QualityCriteriaPage } from './pages/QualityCriteriaPage'
 import { ReviewPage } from './pages/ReviewPage'
 
@@ -19,6 +20,7 @@ export function App() {
         <Route path="documents/:id" element={<DocumentDetailPage />} />
         <Route path="upload" element={<DocumentUploadPage />} />
         <Route path="quality-criteria" element={<QualityCriteriaPage />} />
+        <Route path="llm-configs" element={<LLMConfigPage />} />
         <Route path="log-sources" element={<LogSourcePage />} />
         <Route path="log-analysis" element={<LogAnalysisPage />} />
         <Route path="chat" element={<ChatPage />} />

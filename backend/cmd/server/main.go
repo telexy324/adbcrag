@@ -25,14 +25,12 @@ func main() {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
 		log.Fatalf("enable pg_trgm: %v", err)
 	}
-	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}); err != nil {
+	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}, &model.LLMConfig{}); err != nil {
 		log.Fatalf("auto migrate: %v", err)
 	}
 	if err := ensureSearchIndexes(db); err != nil {
 		log.Fatalf("create search indexes: %v", err)
 	}
-
-	deepSeek := client.NewDeepSeekClient(cfg.DeepSeekBaseURL, cfg.DeepSeekAPIKey, cfg.DeepSeekModel)
 
 	docRepo := repository.NewDocumentRepository(db)
 	chunkRepo := repository.NewChunkRepository(db)
@@ -41,18 +39,21 @@ func main() {
 	criteriaRepo := repository.NewQualityCriteriaRepository(db)
 	logSourceRepo := repository.NewLogSourceRepository(db)
 	logAnalysisRepo := repository.NewLogAnalysisRepository(db)
+	llmConfigRepo := repository.NewLLMConfigRepository(db)
 	credentialCrypto := security.NewCredentialCrypto(cfg.CredentialKey)
 	esClient := client.NewElasticsearchClient()
 	sshClient := client.NewSSHLogClient()
+	llmConfigSvc := service.NewLLMConfigService(cfg, llmConfigRepo, credentialCrypto)
+	llmClient := service.NewDynamicLLMClient(llmConfigSvc)
 
 	documentSvc := service.NewDocumentService(
-		cfg, docRepo, chunkRepo, service.NewParserService(), service.NewChunkService(), service.NewQualityService(deepSeek), service.NewRetrievalMetadataService(deepSeek),
+		cfg, docRepo, chunkRepo, service.NewParserService(), service.NewChunkService(), service.NewQualityService(llmClient), service.NewRetrievalMetadataService(llmClient),
 	)
-	ragSvc := service.NewRAGService(cfg, chunkRepo, qaRepo, deepSeek)
+	ragSvc := service.NewRAGService(cfg, chunkRepo, qaRepo, llmClient)
 	reviewSvc := service.NewReviewService(docRepo, reviewRepo)
 	criteriaSvc := service.NewQualityCriteriaService(criteriaRepo)
 	logSourceSvc := service.NewLogSourceService(cfg, logSourceRepo, credentialCrypto, esClient, sshClient)
-	logAnalysisSvc := service.NewLogAnalysisService(cfg, logSourceSvc, logAnalysisRepo, chunkRepo, esClient, sshClient, deepSeek)
+	logAnalysisSvc := service.NewLogAnalysisService(cfg, logSourceSvc, logAnalysisRepo, chunkRepo, esClient, sshClient, llmClient)
 
 	r := router.New(router.Handlers{
 		Health: handler.NewHealthHandler(), Document: handler.NewDocumentHandler(documentSvc),
@@ -60,6 +61,7 @@ func main() {
 		QualityCriteria: handler.NewQualityCriteriaHandler(criteriaSvc),
 		LogSource:       handler.NewLogSourceHandler(logSourceSvc),
 		LogAnalysis:     handler.NewLogAnalysisHandler(logAnalysisSvc),
+		LLMConfig:       handler.NewLLMConfigHandler(llmConfigSvc),
 	})
 	log.Printf("server listening on :%s", cfg.AppPort)
 	if err := r.Run(":" + cfg.AppPort); err != nil {

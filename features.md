@@ -6,9 +6,9 @@
 
 系统基于内部运维文档、操作手册、告警处置手册、应急预案、变更回滚方案等资料，构建 RAG 知识库。
 
-用户可以上传文档，并基于知识库提问。系统需要先检索知识库内容，再调用内网 DeepSeek v4 LLM 模型生成答案。
+用户可以上传文档，并基于知识库提问。系统需要先检索知识库内容，再调用已配置的大模型接口生成答案，默认兼容内网 DeepSeek v4，也支持 Qwen3 和其他 OpenAI Chat Completions 兼容接口。
 
-系统还需要支持对接 Elasticsearch 和服务器内指定路径的日志文件，结合已发布运维文档和 LLM 接口做日志检索、异常摘要、根因分析和处置建议。
+系统还需要支持对接 Elasticsearch 和服务器内指定路径的日志文件，结合已发布运维文档和可选 LLM 接口做日志检索、异常摘要、根因分析和处置建议。
 
 本项目只用于辅助运维分析，不自动执行任何生产命令。
 
@@ -37,23 +37,23 @@
 * MinIO 或本地文件存储
 * Elasticsearch REST API
 * SSH / SFTP
-* 内网 DeepSeek v4 LLM 模型
+* 可配置 LLM 接口：DeepSeek v4、Qwen3、OpenAI-compatible
 
 ### 检索策略
 
-当前环境只有 DeepSeek v4 LLM，没有独立 embedding 模型。
+当前环境不依赖独立 embedding 模型。
 
 因此第一阶段不使用 pgvector / embedding，改用以下方案尽量接近 RAG 效果：
 
-1. 文档切片后，调用 DeepSeek 为每个 chunk 生成检索增强信息：
+1. 文档切片后，调用默认 LLM 为每个 chunk 生成检索增强信息：
    - 摘要 summary
    - 关键词 keywords
    - 用户可能提出的问题 possible_questions
 2. 使用 PostgreSQL `pg_trgm` 对 `content`、`source_section`、`search_text` 做文本相似度召回。
-3. 用户提问时，先调用 DeepSeek 做查询改写和关键词抽取。
+3. 用户提问时，先调用默认 LLM 做查询改写和关键词抽取。
 4. 数据库召回 TopN 候选片段。
-5. 再调用 DeepSeek 对候选片段重排，选出 TopK。
-6. 最后调用 DeepSeek 基于 TopK 片段生成答案并展示引用来源。
+5. 再调用默认 LLM 对候选片段重排，选出 TopK。
+6. 最后调用默认 LLM 基于 TopK 片段生成答案并展示引用来源。
 
 后续如果接入内网 embedding 模型，可以把检索层替换为 pgvector，RAG 回答层不需要大改。
 
@@ -136,7 +136,7 @@ DeepSeek 对候选片段重排，选出 TopK
     ↓
 组装 Prompt
     ↓
-调用 DeepSeek v4
+调用默认 LLM
     ↓
 返回答案
     ↓
@@ -162,7 +162,7 @@ DeepSeek 对候选片段重排，选出 TopK
     ↓
 组装“日志上下文 + 知识库片段 + 用户问题” Prompt
     ↓
-调用 DeepSeek v4
+调用默认 LLM
     ↓
 返回异常摘要、可能原因、排查建议、风险提示、引用文档和日志证据
 ```
@@ -603,13 +603,15 @@ ES_QUERY_TIMEOUT_SECONDS=15
 
 说明：
 
-如果内网 DeepSeek v4 接口兼容 OpenAI Chat Completions，则后端直接使用：
+`DEEPSEEK_*` 作为无数据库配置时的兜底默认模型接口。正式使用时，可以在“模型接口”页面配置 DeepSeek、Qwen3 或其他 OpenAI Chat Completions 兼容接口，并选择一个启用的默认模型。
+
+如果模型接口兼容 OpenAI Chat Completions，则后端直接使用：
 
 ```text
 POST /v1/chat/completions
 ```
 
-如果不兼容，需要在 `deepseek_client.go` 中封装适配器。
+如果不兼容，需要在 LLM client 中封装适配器。
 
 日志源账号、密码、私钥不允许写死在配置文件或代码中。用户在页面录入后，后端使用 `CREDENTIAL_ENCRYPTION_KEY` 加密存储，并只在连接 Elasticsearch 或 SSH/SFTP 时临时解密使用。
 
@@ -969,6 +971,75 @@ Content-Type: application/json
 
 ---
 
+### 10.10 模型接口管理
+
+#### 10.10.1 查询模型接口列表
+
+```http
+GET /api/llm-configs
+```
+
+#### 10.10.2 创建模型接口
+
+```http
+POST /api/llm-configs
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "name": "Qwen3 生产接口",
+  "provider": "qwen3",
+  "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "model": "qwen3-plus",
+  "apiKey": "******",
+  "temperature": 0.2,
+  "isDefault": true,
+  "enabled": true
+}
+```
+
+说明：
+
+```text
+provider 支持 deepseek、qwen3、openai_compatible
+apiKey 只在创建或更新时提交，后端加密保存，查询接口不返回明文
+同一时间只有一个默认模型接口
+所有文档质检、检索增强、问答、日志分析默认使用当前默认模型接口
+未配置默认模型时，回退使用 DEEPSEEK_* 环境变量
+```
+
+#### 10.10.3 更新模型接口
+
+```http
+PUT /api/llm-configs/{id}
+```
+
+#### 10.10.4 设为默认模型接口
+
+```http
+POST /api/llm-configs/{id}/default
+```
+
+#### 10.10.5 测试模型接口
+
+```http
+POST /api/llm-configs/{id}/test
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "prompt": "请回复：连接成功"
+}
+```
+
+---
+
 ## 11. 文档切片规则
 
 ### 11.1 切片目标
@@ -1312,7 +1383,7 @@ ES 查询需要限制：
 
 ---
 
-## 15. DeepSeek v4 客户端要求
+## 15. LLM 客户端要求
 
 ### 15.1 Chat 接口
 
@@ -1338,6 +1409,7 @@ type ChatRequest struct {
 
 type ChatResponse struct {
     Content string
+    Model string
 }
 
 type DeepSeekClient interface {
@@ -1345,17 +1417,26 @@ type DeepSeekClient interface {
 }
 ```
 
-如果接口 OpenAI 兼容，请调用：
+DeepSeek、Qwen3、OpenAI-compatible 均优先按 OpenAI Chat Completions 兼容接口调用：
 
 ```http
-POST {DEEPSEEK_BASE_URL}/chat/completions
+POST {BASE_URL}/chat/completions
+```
+
+Qwen3 示例配置：
+
+```text
+provider = qwen3
+baseUrl  = https://dashscope.aliyuncs.com/compatible-mode/v1
+model    = qwen3-plus 或内网实际模型名
+apiKey   = 页面录入后加密保存
 ```
 
 ---
 
 ### 15.2 LLM 用途
 
-由于当前只有 DeepSeek v4 LLM，后端需要复用同一个 Chat 接口完成：
+后端需要复用当前默认 LLM 接口完成：
 
 ```text
 1. 文档质量检查
@@ -1585,7 +1666,7 @@ score < 70: draft，不允许直接提交审核
 4. 从日志中抽取错误码、异常类型、接口名、组件名
 5. 调用 RAG 检索相关知识库文档
 6. 组装日志分析 Prompt
-7. 调用 DeepSeek v4 生成分析结果
+7. 调用默认 LLM 生成分析结果
 8. 保存 log_analysis_task 记录
 9. 返回日志证据、可能原因、排查建议和知识库引用
 ```
@@ -1899,7 +1980,7 @@ export async function analyzeLogs(data: {
 5. 文档切片
 6. 检索增强信息入库
 7. 知识库问答
-8. DeepSeek v4 调用
+8. 可选 LLM 接口配置和调用
 9. 引用来源展示
 10. 文档质量检查
 11. Elasticsearch 日志源配置
@@ -2039,12 +2120,12 @@ export async function analyzeLogs(data: {
 
 ---
 
-### Task 7：DeepSeek v4 调用
+### Task 7：可选 LLM 接口调用
 
 目标：
 
 ```text
-实现 deepseek_client.go。
+实现 OpenAI Chat Completions 兼容 LLM 客户端，支持 DeepSeek、Qwen3 和 OpenAI-compatible 配置。
 ```
 
 验收标准：
@@ -2053,6 +2134,9 @@ export async function analyzeLogs(data: {
 1. 可以发送 messages
 2. 可以解析回答内容
 3. 错误时返回明确 error
+4. 可以通过页面新增 Qwen3 接口
+5. 可以选择默认模型接口
+6. 未配置默认接口时回退使用 DEEPSEEK_* 环境变量
 ```
 
 ---
@@ -2072,7 +2156,7 @@ export async function analyzeLogs(data: {
 2. 可以用 pg_trgm 召回候选 chunks
 3. 可以调用 DeepSeek 重排候选 chunks
 4. 可以组装 Prompt
-5. 可以调用 DeepSeek v4
+5. 可以调用默认 LLM
 6. 返回 answer 和 citations
 ```
 
@@ -2261,7 +2345,7 @@ export async function analyzeLogs(data: {
 4. 审核发布文档
 5. 用户在问答页面提问
 6. 系统检索知识库
-7. 调用内网 DeepSeek v4 生成答案
+7. 调用默认 LLM 生成答案
 8. 页面展示答案和引用来源
 9. 如果知识库无相关内容，明确提示没有依据
 10. 配置 Elasticsearch 日志源并完成连通性测试

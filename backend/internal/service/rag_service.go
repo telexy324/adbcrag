@@ -48,7 +48,7 @@ func (s *RAGService) Ask(ctx context.Context, req dto.AskQuestionRequest) (*dto.
 	}
 	if len(results) == 0 {
 		answer := "知识库中未找到明确依据。AI 回答仅供运维排查参考，生产操作请遵守变更审批流程。"
-		_ = s.saveRecord(ctx, req.Question, answer, citations)
+		_ = s.saveRecord(ctx, req.Question, answer, s.cfg.DeepSeekModel, citations)
 		return &dto.AskQuestionResponse{Answer: answer, Citations: citations}, nil
 	}
 	prompt := buildRAGPrompt(req.Question, results)
@@ -57,7 +57,7 @@ func (s *RAGService) Ask(ctx context.Context, req dto.AskQuestionRequest) (*dto.
 		return nil, err
 	}
 	answer := ensureSafety(resp.Content)
-	if err := s.saveRecord(ctx, req.Question, answer, citations); err != nil {
+	if err := s.saveRecord(ctx, req.Question, answer, chooseNonEmpty(resp.Model, s.cfg.DeepSeekModel), citations); err != nil {
 		return nil, err
 	}
 	return &dto.AskQuestionResponse{Answer: answer, Citations: citations}, nil
@@ -150,10 +150,10 @@ func (s *RAGService) rerank(ctx context.Context, question string, candidates []r
 	return reranked
 }
 
-func (s *RAGService) saveRecord(ctx context.Context, question, answer string, citations []dto.Citation) error {
+func (s *RAGService) saveRecord(ctx context.Context, question, answer, modelName string, citations []dto.Citation) error {
 	data, _ := json.Marshal(citations)
 	return s.qa.Create(ctx, &model.QARecord{
-		Question: question, Answer: answer, RetrievedChunks: datatypes.JSON(data), ModelName: s.cfg.DeepSeekModel,
+		Question: question, Answer: answer, RetrievedChunks: datatypes.JSON(data), ModelName: modelName,
 	})
 }
 

@@ -24,6 +24,7 @@ type ChatRequest struct {
 
 type ChatResponse struct {
 	Content string
+	Model   string
 }
 
 type DeepSeekClient interface {
@@ -31,18 +32,24 @@ type DeepSeekClient interface {
 }
 
 type OpenAICompatibleDeepSeekClient struct {
-	baseURL string
-	apiKey  string
-	model   string
-	http    *http.Client
+	provider string
+	baseURL  string
+	apiKey   string
+	model    string
+	http     *http.Client
 }
 
 func NewDeepSeekClient(baseURL, apiKey, model string) DeepSeekClient {
+	return NewOpenAICompatibleLLMClient("deepseek", baseURL, apiKey, model)
+}
+
+func NewOpenAICompatibleLLMClient(provider, baseURL, apiKey, model string) DeepSeekClient {
 	return &OpenAICompatibleDeepSeekClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		model:   model,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		provider: provider,
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		apiKey:   apiKey,
+		model:    model,
+		http:     &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -63,7 +70,7 @@ func (c *OpenAICompatibleDeepSeekClient) Chat(ctx context.Context, messages []Ch
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("deepseek chat failed: status=%d body=%s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("%s chat failed: status=%d body=%s", c.provider, resp.StatusCode, string(respBody))
 	}
 	var parsed struct {
 		Choices []struct {
@@ -71,10 +78,10 @@ func (c *OpenAICompatibleDeepSeekClient) Chat(ctx context.Context, messages []Ch
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, fmt.Errorf("parse deepseek response: %w", err)
+		return nil, fmt.Errorf("parse %s response: %w", c.provider, err)
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, fmt.Errorf("deepseek response has no choices")
+		return nil, fmt.Errorf("%s response has no choices", c.provider)
 	}
-	return &ChatResponse{Content: parsed.Choices[0].Message.Content}, nil
+	return &ChatResponse{Content: parsed.Choices[0].Message.Content, Model: c.model}, nil
 }

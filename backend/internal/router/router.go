@@ -15,6 +15,7 @@ type Handlers struct {
 	QualityCriteria *handler.QualityCriteriaHandler
 	LogSource       *handler.LogSourceHandler
 	LogAnalysis     *handler.LogAnalysisHandler
+	LLMConfig       *handler.LLMConfigHandler
 }
 
 func New(handlers Handlers) *gin.Engine {
@@ -39,6 +40,12 @@ func New(handlers Handlers) *gin.Engine {
 	api.POST("/log-sources/:id/test", handlers.LogSource.Test)
 	api.POST("/logs/preview", handlers.LogAnalysis.Preview)
 	api.POST("/log-analysis", handlers.LogAnalysis.Analyze)
+	api.GET("/llm-configs", handlers.LLMConfig.List)
+	api.POST("/llm-configs", handlers.LLMConfig.Create)
+	api.PUT("/llm-configs/:id", handlers.LLMConfig.Update)
+	api.DELETE("/llm-configs/:id", handlers.LLMConfig.Delete)
+	api.POST("/llm-configs/:id/default", handlers.LLMConfig.SetDefault)
+	api.POST("/llm-configs/:id/test", handlers.LLMConfig.Test)
 	api.POST("/qa/ask", handlers.QA.Ask)
 	return r
 }
