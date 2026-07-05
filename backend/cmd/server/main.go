@@ -9,6 +9,7 @@ import (
 	"ops-kb-rag/backend/internal/model"
 	"ops-kb-rag/backend/internal/repository"
 	"ops-kb-rag/backend/internal/router"
+	"ops-kb-rag/backend/internal/security"
 	"ops-kb-rag/backend/internal/service"
 
 	"gorm.io/driver/postgres"
@@ -24,7 +25,7 @@ func main() {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
 		log.Fatalf("enable pg_trgm: %v", err)
 	}
-	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}); err != nil {
+	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}); err != nil {
 		log.Fatalf("auto migrate: %v", err)
 	}
 	if err := ensureSearchIndexes(db); err != nil {
@@ -38,6 +39,11 @@ func main() {
 	qaRepo := repository.NewQARepository(db)
 	reviewRepo := repository.NewReviewRepository(db)
 	criteriaRepo := repository.NewQualityCriteriaRepository(db)
+	logSourceRepo := repository.NewLogSourceRepository(db)
+	logAnalysisRepo := repository.NewLogAnalysisRepository(db)
+	credentialCrypto := security.NewCredentialCrypto(cfg.CredentialKey)
+	esClient := client.NewElasticsearchClient()
+	sshClient := client.NewSSHLogClient()
 
 	documentSvc := service.NewDocumentService(
 		cfg, docRepo, chunkRepo, service.NewParserService(), service.NewChunkService(), service.NewQualityService(deepSeek), service.NewRetrievalMetadataService(deepSeek),
@@ -45,11 +51,15 @@ func main() {
 	ragSvc := service.NewRAGService(cfg, chunkRepo, qaRepo, deepSeek)
 	reviewSvc := service.NewReviewService(docRepo, reviewRepo)
 	criteriaSvc := service.NewQualityCriteriaService(criteriaRepo)
+	logSourceSvc := service.NewLogSourceService(cfg, logSourceRepo, credentialCrypto, esClient, sshClient)
+	logAnalysisSvc := service.NewLogAnalysisService(cfg, logSourceSvc, logAnalysisRepo, chunkRepo, esClient, sshClient, deepSeek)
 
 	r := router.New(router.Handlers{
 		Health: handler.NewHealthHandler(), Document: handler.NewDocumentHandler(documentSvc),
 		QA: handler.NewQAHandler(ragSvc), Review: handler.NewReviewHandler(reviewSvc),
 		QualityCriteria: handler.NewQualityCriteriaHandler(criteriaSvc),
+		LogSource:       handler.NewLogSourceHandler(logSourceSvc),
+		LogAnalysis:     handler.NewLogAnalysisHandler(logAnalysisSvc),
 	})
 	log.Printf("server listening on :%s", cfg.AppPort)
 	if err := r.Run(":" + cfg.AppPort); err != nil {

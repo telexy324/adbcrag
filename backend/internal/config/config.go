@@ -25,6 +25,12 @@ type Config struct {
 	DeepSeekModel   string
 	RAGTopK         int
 	RAGRecallK      int
+	CredentialKey   string
+	LogMaxLines     int
+	LogMaxBytes     int
+	LogTimeoutSec   int
+	SSHTimeoutSec   int
+	ESTimeoutSec    int
 }
 
 func Load() *Config {
@@ -46,6 +52,12 @@ func Load() *Config {
 		DeepSeekModel:   getEnv("DEEPSEEK_MODEL", "deepseek-v4"),
 		RAGTopK:         getEnvInt("RAG_TOP_K", 5),
 		RAGRecallK:      getEnvInt("RAG_RECALL_K", 30),
+		CredentialKey:   getEnv("CREDENTIAL_ENCRYPTION_KEY", "dev-only-change-me-32-bytes-minimum"),
+		LogMaxLines:     getEnvInt("LOG_SAMPLE_MAX_LINES", 500),
+		LogMaxBytes:     getEnvInt("LOG_SAMPLE_MAX_BYTES", 262144),
+		LogTimeoutSec:   getEnvInt("LOG_ANALYSIS_TIMEOUT_SECONDS", 60),
+		SSHTimeoutSec:   getEnvInt("SSH_CONNECT_TIMEOUT_SECONDS", 10),
+		ESTimeoutSec:    getEnvInt("ES_QUERY_TIMEOUT_SECONDS", 15),
 	}
 }
 

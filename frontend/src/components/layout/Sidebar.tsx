@@ -1,4 +1,4 @@
-import { ClipboardList, FileCheck, FileText, Home, MessageSquare, Upload } from 'lucide-react'
+import { ClipboardList, FileCheck, FileText, Home, MessageSquare, SearchCode, ServerCog, Upload } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { cn } from '../../lib/utils'
 
@@ -7,6 +7,8 @@ const items = [
   { to: '/documents', label: '文档库', icon: FileText },
   { to: '/upload', label: '文档入库', icon: Upload },
   { to: '/quality-criteria', label: '评分标准', icon: ClipboardList },
+  { to: '/log-sources', label: '日志源', icon: ServerCog },
+  { to: '/log-analysis', label: '日志分析', icon: SearchCode },
   { to: '/chat', label: '知识问答', icon: MessageSquare },
   { to: '/review', label: '审核发布', icon: FileCheck },
 ]

@@ -13,6 +13,8 @@ type Handlers struct {
 	QA              *handler.QAHandler
 	Review          *handler.ReviewHandler
 	QualityCriteria *handler.QualityCriteriaHandler
+	LogSource       *handler.LogSourceHandler
+	LogAnalysis     *handler.LogAnalysisHandler
 }
 
 func New(handlers Handlers) *gin.Engine {
@@ -30,6 +32,13 @@ func New(handlers Handlers) *gin.Engine {
 	api.PUT("/quality-criteria/:id", handlers.QualityCriteria.Update)
 	api.DELETE("/quality-criteria/:id", handlers.QualityCriteria.Delete)
 	api.POST("/quality-criteria/:id/default", handlers.QualityCriteria.SetDefault)
+	api.GET("/log-sources", handlers.LogSource.List)
+	api.POST("/log-sources", handlers.LogSource.Create)
+	api.PUT("/log-sources/:id", handlers.LogSource.Update)
+	api.DELETE("/log-sources/:id", handlers.LogSource.Delete)
+	api.POST("/log-sources/:id/test", handlers.LogSource.Test)
+	api.POST("/logs/preview", handlers.LogAnalysis.Preview)
+	api.POST("/log-analysis", handlers.LogAnalysis.Analyze)
 	api.POST("/qa/ask", handlers.QA.Ask)
 	return r
 }
