@@ -5,6 +5,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { DocumentDetailPage } from './pages/DocumentDetailPage'
 import { DocumentListPage } from './pages/DocumentListPage'
 import { DocumentUploadPage } from './pages/DocumentUploadPage'
+import { QualityCriteriaPage } from './pages/QualityCriteriaPage'
 import { ReviewPage } from './pages/ReviewPage'
 
 export function App() {
@@ -15,6 +16,7 @@ export function App() {
         <Route path="documents" element={<DocumentListPage />} />
         <Route path="documents/:id" element={<DocumentDetailPage />} />
         <Route path="upload" element={<DocumentUploadPage />} />
+        <Route path="quality-criteria" element={<QualityCriteriaPage />} />
         <Route path="chat" element={<ChatPage />} />
         <Route path="review" element={<ReviewPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

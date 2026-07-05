@@ -8,10 +8,11 @@ import (
 )
 
 type Handlers struct {
-	Health   *handler.HealthHandler
-	Document *handler.DocumentHandler
-	QA       *handler.QAHandler
-	Review   *handler.ReviewHandler
+	Health          *handler.HealthHandler
+	Document        *handler.DocumentHandler
+	QA              *handler.QAHandler
+	Review          *handler.ReviewHandler
+	QualityCriteria *handler.QualityCriteriaHandler
 }
 
 func New(handlers Handlers) *gin.Engine {
@@ -24,6 +25,11 @@ func New(handlers Handlers) *gin.Engine {
 	api.GET("/documents", handlers.Document.List)
 	api.GET("/documents/:id", handlers.Document.Detail)
 	api.POST("/documents/:id/review", handlers.Review.Review)
+	api.GET("/quality-criteria", handlers.QualityCriteria.List)
+	api.POST("/quality-criteria", handlers.QualityCriteria.Create)
+	api.PUT("/quality-criteria/:id", handlers.QualityCriteria.Update)
+	api.DELETE("/quality-criteria/:id", handlers.QualityCriteria.Delete)
+	api.POST("/quality-criteria/:id/default", handlers.QualityCriteria.SetDefault)
 	api.POST("/qa/ask", handlers.QA.Ask)
 	return r
 }

@@ -29,14 +29,15 @@ func NewDocumentService(cfg *config.Config, docs *repository.DocumentRepository,
 }
 
 type UploadInput struct {
-	File          multipart.File
-	FileHeader    *multipart.FileHeader
-	Title         string
-	SystemName    string
-	ComponentName string
-	DocType       string
-	Tags          string
-	CreatedBy     string
+	File            multipart.File
+	FileHeader      *multipart.FileHeader
+	Title           string
+	SystemName      string
+	ComponentName   string
+	DocType         string
+	Tags            string
+	QualityCriteria string
+	CreatedBy       string
 }
 
 func (s *DocumentService) Upload(ctx context.Context, input UploadInput) (*dto.UploadDocumentResponse, error) {
@@ -55,7 +56,7 @@ func (s *DocumentService) Upload(ctx context.Context, input UploadInput) (*dto.U
 	if err != nil {
 		return nil, err
 	}
-	quality, qualityJSON, err := s.quality.Check(ctx, content)
+	quality, qualityJSON, err := s.quality.Check(ctx, content, input.QualityCriteria)
 	if err != nil {
 		return nil, err
 	}

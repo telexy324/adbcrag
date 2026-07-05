@@ -24,7 +24,7 @@ func main() {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
 		log.Fatalf("enable pg_trgm: %v", err)
 	}
-	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}); err != nil {
+	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}); err != nil {
 		log.Fatalf("auto migrate: %v", err)
 	}
 	if err := ensureSearchIndexes(db); err != nil {
@@ -37,16 +37,19 @@ func main() {
 	chunkRepo := repository.NewChunkRepository(db)
 	qaRepo := repository.NewQARepository(db)
 	reviewRepo := repository.NewReviewRepository(db)
+	criteriaRepo := repository.NewQualityCriteriaRepository(db)
 
 	documentSvc := service.NewDocumentService(
 		cfg, docRepo, chunkRepo, service.NewParserService(), service.NewChunkService(), service.NewQualityService(deepSeek), service.NewRetrievalMetadataService(deepSeek),
 	)
 	ragSvc := service.NewRAGService(cfg, chunkRepo, qaRepo, deepSeek)
 	reviewSvc := service.NewReviewService(docRepo, reviewRepo)
+	criteriaSvc := service.NewQualityCriteriaService(criteriaRepo)
 
 	r := router.New(router.Handlers{
 		Health: handler.NewHealthHandler(), Document: handler.NewDocumentHandler(documentSvc),
 		QA: handler.NewQAHandler(ragSvc), Review: handler.NewReviewHandler(reviewSvc),
+		QualityCriteria: handler.NewQualityCriteriaHandler(criteriaSvc),
 	})
 	log.Printf("server listening on :%s", cfg.AppPort)
 	if err := r.Run(":" + cfg.AppPort); err != nil {

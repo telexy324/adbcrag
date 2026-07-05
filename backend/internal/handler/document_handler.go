@@ -27,9 +27,15 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 	}
 	defer file.Close()
 	result, err := h.service.Upload(c.Request.Context(), service.UploadInput{
-		File: file, FileHeader: header, Title: c.PostForm("title"), SystemName: c.PostForm("systemName"),
-		ComponentName: c.PostForm("componentName"), DocType: c.PostForm("docType"), Tags: c.PostForm("tags"),
-		CreatedBy: c.GetHeader("X-User"),
+		File:            file,
+		FileHeader:      header,
+		Title:           c.PostForm("title"),
+		SystemName:      c.PostForm("systemName"),
+		ComponentName:   c.PostForm("componentName"),
+		DocType:         c.PostForm("docType"),
+		Tags:            c.PostForm("tags"),
+		QualityCriteria: c.PostForm("qualityCriteria"),
+		CreatedBy:       c.GetHeader("X-User"),
 	})
 	if err != nil {
 		dto.Error(c, uploadErrorStatus(err), err.Error())
