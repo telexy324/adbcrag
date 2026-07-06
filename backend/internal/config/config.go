@@ -31,6 +31,8 @@ type Config struct {
 	LogTimeoutSec   int
 	SSHTimeoutSec   int
 	ESTimeoutSec    int
+	LogLevel        string
+	LogFormat       string
 }
 
 func Load() *Config {
@@ -58,6 +60,8 @@ func Load() *Config {
 		LogTimeoutSec:   getEnvInt("LOG_ANALYSIS_TIMEOUT_SECONDS", 60),
 		SSHTimeoutSec:   getEnvInt("SSH_CONNECT_TIMEOUT_SECONDS", 10),
 		ESTimeoutSec:    getEnvInt("ES_QUERY_TIMEOUT_SECONDS", 15),
+		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		LogFormat:       getEnv("LOG_FORMAT", "json"),
 	}
 }
 

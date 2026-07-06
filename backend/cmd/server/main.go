@@ -1,11 +1,13 @@
 package main
 
 import (
-	"log"
+	"context"
+	"os"
 
 	"ops-kb-rag/backend/internal/client"
 	"ops-kb-rag/backend/internal/config"
 	"ops-kb-rag/backend/internal/handler"
+	"ops-kb-rag/backend/internal/logger"
 	"ops-kb-rag/backend/internal/model"
 	"ops-kb-rag/backend/internal/repository"
 	"ops-kb-rag/backend/internal/router"
@@ -18,18 +20,20 @@ import (
 
 func main() {
 	cfg := config.Load()
+	logger.Init(cfg.LogLevel, cfg.LogFormat, cfg.AppEnv)
+
 	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{})
 	if err != nil {
-		log.Fatalf("connect database: %v", err)
+		fatal("connect database", err)
 	}
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
-		log.Fatalf("enable pg_trgm: %v", err)
+		fatal("enable pg_trgm", err)
 	}
 	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}, &model.LLMConfig{}); err != nil {
-		log.Fatalf("auto migrate: %v", err)
+		fatal("auto migrate", err)
 	}
 	if err := ensureSearchIndexes(db); err != nil {
-		log.Fatalf("create search indexes: %v", err)
+		fatal("create search indexes", err)
 	}
 
 	docRepo := repository.NewDocumentRepository(db)
@@ -63,10 +67,15 @@ func main() {
 		LogAnalysis:     handler.NewLogAnalysisHandler(logAnalysisSvc),
 		LLMConfig:       handler.NewLLMConfigHandler(llmConfigSvc),
 	})
-	log.Printf("server listening on :%s", cfg.AppPort)
+	logger.Info(context.Background(), "server listening", "port", cfg.AppPort, "env", cfg.AppEnv, "log_level", cfg.LogLevel, "log_format", cfg.LogFormat)
 	if err := r.Run(":" + cfg.AppPort); err != nil {
-		log.Fatalf("run server: %v", err)
+		fatal("run server", err)
 	}
+}
+
+func fatal(msg string, err error) {
+	logger.Error(context.Background(), msg, "error", err)
+	os.Exit(1)
 }
 
 func ensureSearchIndexes(db *gorm.DB) error {
