@@ -2464,3 +2464,1838 @@ Redis 内存告警怎么处理？
 6. 涉及清理、扩容、重启必须走变更审批
 7. 引用 Redis 内存告警处置手册
 ```
+
+---
+
+## 29. K8s 日志 / 告警采集与分析扩展说明
+
+### 29.1 扩展目标
+
+在现有运维知识库 RAG 系统和日志分析能力基础上，增加 Kubernetes 集群只读采集能力。
+
+系统需要支持对接 Kubernetes API Server，读取指定集群、指定 namespace 下的 Pod、Event、Workload、Service、Endpoint、Ingress、HPA、PVC 等信息，并结合 Prometheus 指标、Elasticsearch 日志、服务器日志文件和已发布知识库文档，完成 K8s 告警解释、Pod 异常诊断、Ingress 访问异常分析、Node 异常分析和服务访问链路分析。
+
+本功能只用于辅助运维分析，不自动执行任何生产命令，不自动修改 Kubernetes 资源，不自动删除、重启、扩容、缩容、回滚任何业务组件。
+
+---
+
+### 29.2 K8s 采集能力边界
+
+系统需要实现：
+
+1. Kubernetes 集群配置管理
+2. Kubernetes 连接测试
+3. Namespace 只读资源采集
+4. Pod 状态采集
+5. Pod Events 采集
+6. Pod 当前日志采集
+7. Pod previous 日志采集
+8. Deployment / StatefulSet / DaemonSet / ReplicaSet 采集
+9. Service / Endpoint / EndpointSlice 采集
+10. Ingress 采集
+11. HPA 采集
+12. PVC 采集
+13. 可选 Node 只读信息采集
+14. Alertmanager 告警内容解析
+15. 基于告警 labels 自动补充 K8s 上下文
+16. 基于 K8s 上下文和知识库文档的 LLM 分析
+17. K8s 诊断历史记录保存
+
+系统暂不实现：
+
+1. 自动执行 kubectl 命令
+2. 自动 exec 进入容器
+3. 自动 attach 容器
+4. 自动 port-forward
+5. 自动 delete Pod
+6. 自动 rollout restart
+7. 自动 scale
+8. 自动 patch / apply / edit Kubernetes 资源
+9. 自动读取 Secret 明文
+10. 自动修改 ConfigMap
+11. 自动修改 Ingress、Service、Deployment
+12. 自动进行生产修复动作
+
+---
+
+### 29.3 K8s 日志 / 告警分析流程
+
+#### 29.3.1 告警接入流程
+
+```text
+用户粘贴 Alertmanager 告警或 Webhook 接收告警
+    ↓
+解析 alertname、cluster、namespace、pod、container、deployment、service、ingress、node 等 labels
+    ↓
+根据告警类型判断需要采集的 K8s 上下文
+    ↓
+调用 Kubernetes API 读取只读资源
+    ↓
+可选调用 Prometheus 查询最近 30 分钟指标
+    ↓
+可选调用 Elasticsearch / 服务器日志源查询应用日志
+    ↓
+对日志和资源信息进行脱敏、截断和结构化
+    ↓
+根据 systemName、componentName、alertName、error keywords 检索已发布知识库文档
+    ↓
+组装“K8s 告警上下文 + 日志样本 + 指标摘要 + 知识库片段 + 用户问题” Prompt
+    ↓
+调用默认 LLM
+    ↓
+返回异常摘要、关键证据、可能原因、建议排查步骤、风险提示、知识库引用
+```
+
+---
+
+#### 29.3.2 Pod 诊断流程
+
+```text
+用户输入 cluster、namespace、pod、container
+    ↓
+读取 Pod 基本状态
+    ↓
+读取 Pod containerStatuses
+    ↓
+读取 Pod Events
+    ↓
+读取当前容器日志
+    ↓
+读取 previous 容器日志
+    ↓
+反查所属 Deployment / StatefulSet / DaemonSet / Job
+    ↓
+读取 ReplicaSet 状态
+    ↓
+读取 Service / Endpoint 关联情况
+    ↓
+可选读取 Node 状态
+    ↓
+可选读取 Prometheus CPU、内存、重启次数指标
+    ↓
+检索已发布知识库文档
+    ↓
+调用 LLM 生成 Pod 诊断报告
+```
+
+---
+
+#### 29.3.3 Ingress / Service 诊断流程
+
+```text
+用户输入 cluster、namespace、ingress 或 service
+    ↓
+读取 Ingress 规则
+    ↓
+读取后端 Service
+    ↓
+读取 Service selector 和 ports
+    ↓
+读取 Endpoint / EndpointSlice
+    ↓
+反查后端 Pod 列表
+    ↓
+检查 Pod Ready 状态
+    ↓
+可选读取 Nginx Ingress Controller 日志
+    ↓
+可选读取 Prometheus 5xx、499、请求耗时、QPS 指标
+    ↓
+检索已发布知识库文档
+    ↓
+调用 LLM 生成访问异常分析
+```
+
+---
+
+### 29.4 K8s 需要采集的内容
+
+#### 29.4.1 Pod 状态
+
+需要采集字段：
+
+```text
+cluster
+namespace
+pod_name
+phase
+node_name
+pod_ip
+host_ip
+start_time
+labels
+annotations keys
+ownerReferences
+restart_policy
+service_account_name
+```
+
+containerStatuses 需要采集：
+
+```text
+container_name
+image
+image_id
+ready
+restart_count
+state
+state_reason
+state_message
+last_state
+last_state_reason
+last_state_message
+last_state_exit_code
+last_state_started_at
+last_state_finished_at
+```
+
+重点识别以下状态：
+
+```text
+CrashLoopBackOff
+ImagePullBackOff
+ErrImagePull
+CreateContainerConfigError
+CreateContainerError
+RunContainerError
+OOMKilled
+Error
+Completed
+Pending
+Evicted
+ContainerCreating
+Terminating
+```
+
+---
+
+#### 29.4.2 Pod Events
+
+需要采集字段：
+
+```text
+type
+reason
+message
+count
+first_timestamp
+last_timestamp
+reporting_component
+involved_object_kind
+involved_object_name
+```
+
+重点关注：
+
+```text
+FailedScheduling
+FailedMount
+FailedAttachVolume
+BackOff
+Unhealthy
+Killing
+Pulled
+Pulling
+Failed
+Created
+Started
+Evicted
+Preempting
+NodeNotReady
+```
+
+---
+
+#### 29.4.3 Pod 日志
+
+需要支持：
+
+```text
+当前日志 logs
+上一次容器日志 previous logs
+按 container 查询日志
+限制 tail 行数
+限制总字节数
+脱敏后进入 LLM
+```
+
+默认限制：
+
+```text
+K8S_LOG_TAIL_LINES=300
+K8S_LOG_MAX_BYTES=262144
+K8S_LOG_PREVIOUS_ENABLED=true
+```
+
+日志进入 LLM 前需要：
+
+```text
+1. 去除重复日志
+2. 聚合相同错误模板
+3. 保留首条、末条、典型样本
+4. 截断超长堆栈
+5. 脱敏手机号、身份证号、银行卡号、token、password、secret、access_key、authorization、cookie 等字段
+```
+
+---
+
+#### 29.4.4 Workload 信息
+
+需要采集以下资源：
+
+```text
+Deployment
+StatefulSet
+DaemonSet
+ReplicaSet
+Job
+CronJob
+```
+
+Deployment / StatefulSet / DaemonSet 需要采集：
+
+```text
+name
+namespace
+replicas
+ready_replicas
+available_replicas
+updated_replicas
+strategy
+selector
+template labels
+containers
+images
+resources.requests
+resources.limits
+env keys
+envFrom refs
+volumeMounts
+volumes refs
+readinessProbe
+livenessProbe
+startupProbe
+nodeSelector
+affinity
+tolerations
+```
+
+注意：
+
+```text
+1. env 只采集 key，不采集 value。
+2. SecretRef 只采集 Secret 名称和 key 名称，不采集 Secret value。
+3. ConfigMapRef 默认只采集名称，不读取内容。
+4. 如需读取 ConfigMap 内容，必须单独配置权限，并在进入 LLM 前脱敏。
+```
+
+---
+
+#### 29.4.5 Service / Endpoint / EndpointSlice
+
+Service 需要采集：
+
+```text
+name
+namespace
+type
+cluster_ip
+ports
+selector
+external_name
+annotations keys
+```
+
+Endpoint / EndpointSlice 需要采集：
+
+```text
+service_name
+addresses
+ports
+ready
+serving
+terminating
+targetRef kind
+targetRef name
+```
+
+需要识别的问题：
+
+```text
+Service selector 不匹配
+Endpoint 为空
+Endpoint 指向的 Pod 未 Ready
+Service targetPort 配置错误
+Ingress 后端 Service 无可用 Endpoint
+```
+
+---
+
+#### 29.4.6 Ingress 信息
+
+需要采集：
+
+```text
+name
+namespace
+ingress_class_name
+rules.host
+rules.path
+backend service name
+backend service port
+tls hosts
+annotations keys
+```
+
+需要识别的问题：
+
+```text
+Ingress backend Service 不存在
+Ingress backend Service 没有 Endpoint
+路径规则不匹配
+IngressClass 配置异常
+Nginx Ingress 返回 502
+Nginx Ingress 返回 503
+Nginx Ingress 返回 504
+Nginx Ingress 返回 499
+```
+
+---
+
+#### 29.4.7 HPA 信息
+
+需要采集：
+
+```text
+name
+namespace
+scale_target_ref
+min_replicas
+max_replicas
+current_replicas
+desired_replicas
+current_metrics
+target_metrics
+conditions
+```
+
+需要识别的问题：
+
+```text
+指标不可用
+未按预期扩容
+扩容频繁抖动
+currentReplicas 与 desiredReplicas 长时间不一致
+CPU / 内存指标获取失败
+```
+
+---
+
+#### 29.4.8 PVC / PV 信息
+
+PVC 需要采集：
+
+```text
+name
+namespace
+phase
+storage_class_name
+access_modes
+requested_storage
+volume_name
+conditions
+```
+
+可选 PV 需要采集：
+
+```text
+name
+phase
+capacity
+access_modes
+reclaim_policy
+storage_class_name
+claim_ref
+```
+
+需要识别的问题：
+
+```text
+PVC Pending
+PV 不存在
+StorageClass 不存在
+FailedMount
+FailedAttachVolume
+挂载超时
+```
+
+---
+
+#### 29.4.9 Node 信息，可选
+
+如果需要分析 NodeNotReady、Pod Evicted、DiskPressure、MemoryPressure、Pod Pending 等问题，需要采集 Node。
+
+Node 需要采集：
+
+```text
+name
+conditions
+capacity
+allocatable
+taints
+labels
+podCIDR
+providerID
+```
+
+重点关注：
+
+```text
+Ready
+MemoryPressure
+DiskPressure
+PIDPressure
+NetworkUnavailable
+```
+
+Node 是集群级资源，第一阶段可以作为可选能力，单独配置 ClusterRole 只读权限。
+
+---
+
+#### 29.4.10 Prometheus 指标，可选
+
+如果系统已有 Prometheus，可选接入以下指标：
+
+```text
+Pod CPU 使用率
+Pod Memory 使用率
+Container restart count
+Pod 网络 RX/TX
+Node CPU 使用率
+Node Memory 使用率
+Node Disk 使用率
+Ingress request count
+Ingress 4xx / 5xx / 499
+Ingress latency
+HPA current metrics
+```
+
+Prometheus 指标采集不是 Kubernetes API 权限的一部分，需要单独配置 Prometheus 数据源。
+
+---
+
+### 29.5 K8s 数据库设计
+
+#### 29.5.1 Kubernetes 集群配置表
+
+```sql
+CREATE TABLE k8s_cluster (
+    id BIGSERIAL PRIMARY KEY,
+
+    name VARCHAR(120) NOT NULL,
+    environment VARCHAR(50),
+    api_server TEXT NOT NULL,
+
+    auth_type VARCHAR(50) NOT NULL,
+    kubeconfig_ref TEXT,
+    bearer_token_ref TEXT,
+    ca_cert_ref TEXT,
+    client_cert_ref TEXT,
+    client_key_ref TEXT,
+
+    allowed_namespaces JSONB,
+    enabled BOOLEAN DEFAULT true,
+
+    created_by VARCHAR(100),
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+```
+
+字段说明：
+
+```text
+name                 集群名称，例如：prod-k8s-01
+environment          环境，例如：prod、test、dr
+api_server           Kubernetes API Server 地址
+auth_type            认证方式：kubeconfig、bearer_token、in_cluster
+kubeconfig_ref       加密后的 kubeconfig 引用
+bearer_token_ref     加密后的 token 引用
+ca_cert_ref          加密后的 CA 证书引用
+client_cert_ref      加密后的客户端证书引用
+client_key_ref       加密后的客户端私钥引用
+allowed_namespaces   允许查询的 namespace 列表
+enabled              是否启用
+```
+
+安全要求：
+
+```text
+1. kubeconfig、token、证书、私钥必须加密保存。
+2. API 返回集群配置时不得返回明文 token、kubeconfig 或私钥。
+3. allowed_namespaces 为空时，不允许默认访问所有 namespace。
+4. 生产环境建议按 namespace 显式授权。
+```
+
+---
+
+#### 29.5.2 K8s 诊断任务表
+
+```sql
+CREATE TABLE k8s_diagnosis_task (
+    id BIGSERIAL PRIMARY KEY,
+
+    cluster_id BIGINT REFERENCES k8s_cluster(id),
+
+    diagnosis_type VARCHAR(50) NOT NULL,
+    question TEXT,
+
+    alert_name VARCHAR(200),
+    severity VARCHAR(50),
+
+    namespace VARCHAR(120),
+    pod_name VARCHAR(255),
+    container_name VARCHAR(255),
+    workload_kind VARCHAR(50),
+    workload_name VARCHAR(255),
+    service_name VARCHAR(255),
+    ingress_name VARCHAR(255),
+    node_name VARCHAR(255),
+
+    time_start TIMESTAMP,
+    time_end TIMESTAMP,
+
+    status VARCHAR(50) DEFAULT 'pending',
+    error_message TEXT,
+
+    k8s_context JSONB,
+    log_samples JSONB,
+    metric_samples JSONB,
+    retrieved_chunks JSONB,
+    result JSONB,
+
+    created_by VARCHAR(100),
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+```
+
+字段说明：
+
+```text
+diagnosis_type     alert、pod、ingress、service、node、pvc、hpa
+k8s_context        本次采集到的 K8s 结构化上下文
+log_samples        本次关联到的日志样本
+metric_samples     本次关联到的指标样本
+retrieved_chunks   本次分析引用的知识库片段
+result             LLM 分析结果
+```
+
+---
+
+### 29.6 后端目录结构扩展
+
+在现有后端目录基础上增加：
+
+```text
+backend/
+  internal/
+    model/
+      k8s_cluster.go
+      k8s_diagnosis_task.go
+
+    handler/
+      k8s_cluster_handler.go
+      k8s_diagnosis_handler.go
+
+    service/
+      k8s_cluster_service.go
+      k8s_collector_service.go
+      k8s_diagnosis_service.go
+      k8s_context_builder.go
+
+    repository/
+      k8s_cluster_repository.go
+      k8s_diagnosis_repository.go
+
+    client/
+      kubernetes_client.go
+      prometheus_client.go
+
+    dto/
+      k8s_dto.go
+```
+
+---
+
+### 29.7 K8s Client 要求
+
+实现文件：
+
+```text
+backend/internal/client/kubernetes_client.go
+```
+
+需要提供方法：
+
+```go
+type K8sClusterConfig struct {
+    ID                int64
+    Name              string
+    Environment       string
+    APIServer         string
+    AuthType          string
+    Kubeconfig        string
+    BearerToken       string
+    CACert            string
+    ClientCert        string
+    ClientKey         string
+    AllowedNamespaces []string
+}
+
+type K8sLogOptions struct {
+    Namespace     string
+    PodName       string
+    ContainerName string
+    TailLines     int64
+    Previous      bool
+    MaxBytes      int64
+}
+
+type KubernetesClient interface {
+    Test(ctx context.Context, cfg K8sClusterConfig) error
+
+    GetPod(ctx context.Context, cfg K8sClusterConfig, namespace string, podName string) (*PodInfo, error)
+    ListPods(ctx context.Context, cfg K8sClusterConfig, namespace string, selector map[string]string) ([]PodInfo, error)
+    GetPodEvents(ctx context.Context, cfg K8sClusterConfig, namespace string, podName string) ([]K8sEvent, error)
+    GetPodLogs(ctx context.Context, cfg K8sClusterConfig, opts K8sLogOptions) ([]LogItem, error)
+
+    GetDeployment(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*WorkloadInfo, error)
+    GetStatefulSet(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*WorkloadInfo, error)
+    GetDaemonSet(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*WorkloadInfo, error)
+    GetReplicaSet(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*WorkloadInfo, error)
+
+    GetService(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*ServiceInfo, error)
+    GetEndpoints(ctx context.Context, cfg K8sClusterConfig, namespace string, serviceName string) (*EndpointInfo, error)
+    GetIngress(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*IngressInfo, error)
+
+    GetHPA(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*HPAInfo, error)
+    GetPVC(ctx context.Context, cfg K8sClusterConfig, namespace string, name string) (*PVCInfo, error)
+
+    GetNode(ctx context.Context, cfg K8sClusterConfig, nodeName string) (*NodeInfo, error)
+}
+```
+
+实现要求：
+
+```text
+1. 使用 client-go 调用 Kubernetes API。
+2. 不通过 shell 执行 kubectl。
+3. 不允许执行 exec、attach、portforward。
+4. 所有读取操作必须校验 namespace 是否在 allowed_namespaces 内。
+5. 所有日志读取必须限制 tailLines 和 maxBytes。
+6. 返回给 LLM 前必须脱敏。
+7. 不返回 Secret 明文。
+```
+
+---
+
+### 29.8 API 设计
+
+#### 29.8.1 创建 K8s 集群配置
+
+```http
+POST /api/k8s/clusters
+Content-Type: application/json
+```
+
+请求示例：
+
+```json
+{
+  "name": "prod-k8s-01",
+  "environment": "prod",
+  "apiServer": "https://10.10.10.10:6443",
+  "authType": "bearer_token",
+  "bearerToken": "******",
+  "caCert": "-----BEGIN CERTIFICATE-----...",
+  "allowedNamespaces": ["pay", "loan", "core"]
+}
+```
+
+说明：
+
+```text
+authType 支持 kubeconfig、bearer_token、in_cluster
+kubeconfig、bearerToken、caCert、clientCert、clientKey 只在创建或更新时提交
+接口返回时不返回明文凭据
+```
+
+---
+
+#### 29.8.2 查询 K8s 集群列表
+
+```http
+GET /api/k8s/clusters
+```
+
+返回：
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "name": "prod-k8s-01",
+      "environment": "prod",
+      "apiServer": "https://10.10.10.10:6443",
+      "authType": "bearer_token",
+      "allowedNamespaces": ["pay", "loan", "core"],
+      "enabled": true
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+#### 29.8.3 更新 K8s 集群配置
+
+```http
+PUT /api/k8s/clusters/{id}
+Content-Type: application/json
+```
+
+---
+
+#### 29.8.4 删除 K8s 集群配置
+
+```http
+DELETE /api/k8s/clusters/{id}
+```
+
+---
+
+#### 29.8.5 测试 K8s 集群连接
+
+```http
+POST /api/k8s/clusters/{id}/test
+```
+
+返回：
+
+```json
+{
+  "ok": true,
+  "message": "连接成功"
+}
+```
+
+---
+
+#### 29.8.6 K8s 告警诊断
+
+```http
+POST /api/k8s/diagnosis/alert
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "clusterId": 1,
+  "alertName": "KubePodCrashLooping",
+  "severity": "critical",
+  "namespace": "pay",
+  "podName": "pay-core-6f8b7d9c7d-xk2lm",
+  "containerName": "pay-core",
+  "question": "这个 Pod 为什么一直重启？",
+  "timeStart": "2026-07-07T09:30:00+08:00",
+  "timeEnd": "2026-07-07T10:00:00+08:00",
+  "topK": 5
+}
+```
+
+返回：
+
+```json
+{
+  "taskId": 1001,
+  "status": "success",
+  "summary": "pay-core Pod 处于 CrashLoopBackOff，最近 10 分钟多次重启。",
+  "riskLevel": "high",
+  "evidence": [
+    "Pod containerStatuses 中 restartCount 持续增加",
+    "previous logs 中存在数据库连接超时异常",
+    "Events 中存在 BackOff restarting failed container"
+  ],
+  "possibleCauses": [
+    "应用启动阶段依赖数据库超时",
+    "配置中数据库连接地址或连接池参数异常",
+    "近期发布后连接初始化逻辑异常"
+  ],
+  "suggestions": [
+    "检查 previous logs 中首次异常堆栈",
+    "检查数据库连接数、慢 SQL 和网络连通性",
+    "确认最近一次发布或配置变更",
+    "如需回滚或重启，必须按生产变更流程审批"
+  ],
+  "riskTips": [
+    "不要直接删除 Pod 或重启 Deployment，需先确认影响范围并遵守变更流程。"
+  ],
+  "citations": [
+    {
+      "documentId": 12,
+      "documentTitle": "K8s Pod 重启告警处置手册",
+      "sourceSection": "3. CrashLoopBackOff 排查"
+    }
+  ]
+}
+```
+
+---
+
+#### 29.8.7 Pod 诊断
+
+```http
+POST /api/k8s/diagnosis/pod
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "clusterId": 1,
+  "namespace": "pay",
+  "podName": "pay-core-6f8b7d9c7d-xk2lm",
+  "containerName": "pay-core",
+  "question": "分析这个 Pod 的异常原因",
+  "includeLogs": true,
+  "includePreviousLogs": true,
+  "includeMetrics": true,
+  "topK": 5
+}
+```
+
+---
+
+#### 29.8.8 Ingress 诊断
+
+```http
+POST /api/k8s/diagnosis/ingress
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "clusterId": 1,
+  "namespace": "pay",
+  "ingressName": "pay-ingress",
+  "question": "最近支付接口出现 502/504，帮忙分析可能原因",
+  "includeNginxIngressLogs": true,
+  "includeMetrics": true,
+  "topK": 5
+}
+```
+
+---
+
+#### 29.8.9 Service 诊断
+
+```http
+POST /api/k8s/diagnosis/service
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "clusterId": 1,
+  "namespace": "pay",
+  "serviceName": "pay-core-svc",
+  "question": "这个服务为什么访问不通？",
+  "topK": 5
+}
+```
+
+---
+
+#### 29.8.10 Node 诊断，可选
+
+```http
+POST /api/k8s/diagnosis/node
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "clusterId": 1,
+  "nodeName": "worker-01",
+  "question": "这个节点为什么 NotReady？",
+  "includeMetrics": true,
+  "topK": 5
+}
+```
+
+---
+
+### 29.9 K8s 采集规则
+
+#### 29.9.1 Namespace 限制
+
+K8s 采集必须遵守：
+
+```text
+1. 每个集群必须配置 allowed_namespaces。
+2. 用户请求中的 namespace 必须在 allowed_namespaces 内。
+3. 不允许默认访问所有 namespace。
+4. 不允许跨 namespace 自动扩大采集范围。
+5. 如果告警中 namespace 为空，必须要求用户补充或根据白名单拒绝采集。
+```
+
+---
+
+#### 29.9.2 日志读取限制
+
+K8s Pod 日志读取必须遵守：
+
+```text
+1. 默认只读取最近 300 行。
+2. 单次日志最大 256KB。
+3. 支持读取 current logs 和 previous logs。
+4. 不允许读取无限日志。
+5. 不允许 watch 实时日志流进入 LLM。
+6. 不允许把未脱敏日志发送给 LLM。
+```
+
+---
+
+#### 29.9.3 Secret 和 ConfigMap 限制
+
+```text
+1. 默认不读取 Secret。
+2. 不返回 Secret 明文。
+3. 如果 Pod 引用了 Secret，只返回 Secret 名称和 key 名称。
+4. 默认不读取 ConfigMap 内容。
+5. 如果确需读取 ConfigMap 内容，必须单独配置权限，并进行敏感字段脱敏。
+6. 禁止把 password、token、secret、access_key、private_key、authorization、cookie 等字段发送给 LLM。
+```
+
+---
+
+#### 29.9.4 高风险操作限制
+
+K8s 诊断助手不允许执行：
+
+```text
+kubectl exec
+kubectl attach
+kubectl port-forward
+kubectl delete
+kubectl apply
+kubectl patch
+kubectl edit
+kubectl scale
+kubectl rollout restart
+kubectl drain
+kubectl cordon
+kubectl uncordon
+```
+
+LLM 可以给出排查建议，但涉及以下动作必须提示生产变更审批：
+
+```text
+重启 Pod
+删除 Pod
+扩容
+缩容
+回滚
+修改 Deployment
+修改 StatefulSet
+修改 ConfigMap
+修改 Ingress
+修改 Service
+迁移流量
+节点隔离
+节点驱逐
+```
+
+---
+
+### 29.10 K8s RBAC 建议
+
+#### 29.10.1 Namespace 级只读 Role
+
+建议第一阶段按业务 namespace 授权，不直接给全集群权限。
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-ai-diagnosis
+  namespace: ops-tools
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8s-ai-diagnosis-reader
+  namespace: pay
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - events
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["discovery.k8s.io"]
+    resources:
+      - endpointslices
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8s-ai-diagnosis-reader-binding
+  namespace: pay
+subjects:
+  - kind: ServiceAccount
+    name: k8s-ai-diagnosis
+    namespace: ops-tools
+roleRef:
+  kind: Role
+  name: k8s-ai-diagnosis-reader
+  apiGroup: rbac.authorization.k8s.io
+```
+
+如果需要读取多个业务 namespace，需要在每个 namespace 下创建对应 RoleBinding。
+
+---
+
+#### 29.10.2 可选 ClusterRole
+
+如果需要读取 Node、PV、StorageClass 等集群级资源，再增加只读 ClusterRole。
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-ai-diagnosis-cluster-reader
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - namespaces
+      - persistentvolumes
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-ai-diagnosis-cluster-reader-binding
+subjects:
+  - kind: ServiceAccount
+    name: k8s-ai-diagnosis
+    namespace: ops-tools
+roleRef:
+  kind: ClusterRole
+  name: k8s-ai-diagnosis-cluster-reader
+  apiGroup: rbac.authorization.k8s.io
+```
+
+---
+
+#### 29.10.3 明确禁止授权
+
+第一阶段不要授予以下权限：
+
+```text
+secrets
+configmaps 明文读取
+pods/exec
+pods/attach
+pods/portforward
+serviceaccounts/token
+create
+update
+patch
+delete
+deletecollection
+```
+
+---
+
+### 29.11 K8s Prompt 设计
+
+#### 29.11.1 K8s 告警分析 Prompt
+
+```text
+你是一个资深银行生产 Kubernetes 运维专家。
+
+请基于【K8s 告警信息】、【K8s 采集上下文】、【日志样本】、【指标样本】和【知识库内容】分析用户问题。
+
+要求：
+1. 必须区分 K8s 采集到的事实、日志中可以直接观察到的事实、指标趋势、知识库依据、以及推测性的可能原因。
+2. 不要编造不存在的 Pod、namespace、node、service、endpoint、日志、时间点或指标。
+3. 如果知识库没有相关依据，请明确说明：“知识库中未找到明确依据”。
+4. 涉及生产命令时，只能作为排查建议展示，不允许描述为可以直接执行。
+5. 涉及重启、删除 Pod、扩容、缩容、回滚、修改配置、修改 Ingress、修改 Service、节点隔离、节点驱逐等高风险操作时，必须提示需要按生产变更流程审批。
+6. 不要建议直接执行 kubectl exec、delete、patch、apply、scale、rollout restart 等操作。
+7. 输出需要包含 K8s 证据、日志证据、指标证据和知识库引用。
+8. 如果当前采集信息不足，请明确说明还缺少哪些信息。
+
+用户问题：
+{{question}}
+
+告警信息：
+{{alert}}
+
+K8s 采集上下文：
+{{k8s_context}}
+
+日志样本：
+{{log_samples}}
+
+指标样本：
+{{metric_samples}}
+
+知识库内容：
+{{chunks}}
+
+请按以下格式回答：
+
+## 异常摘要
+
+## K8s 证据
+
+## 日志证据
+
+## 指标证据
+
+## 可能原因
+
+## 建议排查步骤
+
+## 建议处理动作
+
+## 风险提示
+
+## 知识库引用
+```
+
+---
+
+#### 29.11.2 Pod 诊断 Prompt
+
+```text
+你是一个资深银行生产 Kubernetes Pod 排查专家。
+
+请基于以下 Pod 状态、Events、日志、Workload 配置、Service/Endpoint 信息和知识库内容，分析 Pod 异常原因。
+
+要求：
+1. 优先根据 Pod containerStatuses、lastState、restartCount、Events、previous logs 判断原因。
+2. 对 CrashLoopBackOff，需要优先查看 previous logs。
+3. 对 OOMKilled，需要结合内存 limit、lastState reason 和内存指标判断。
+4. 对 ImagePullBackOff，需要结合 Events、image、imagePullSecrets 引用情况判断。
+5. 对 Pending，需要结合 Events、调度失败原因、PVC、Node 资源判断。
+6. 对 Readiness/Liveness probe failed，需要结合 probe 配置、Events、容器日志和 Endpoint 状态判断。
+7. 不要编造采集信息中不存在的原因。
+8. 涉及生产变更动作必须提示审批。
+
+用户问题：
+{{question}}
+
+Pod 信息：
+{{pod_info}}
+
+Pod Events：
+{{pod_events}}
+
+当前日志：
+{{current_logs}}
+
+上一次容器日志：
+{{previous_logs}}
+
+Workload 信息：
+{{workload_info}}
+
+Service / Endpoint 信息：
+{{service_endpoint_info}}
+
+Node 信息：
+{{node_info}}
+
+指标样本：
+{{metric_samples}}
+
+知识库内容：
+{{chunks}}
+
+请按以下格式回答：
+
+## 结论
+
+## 关键证据
+
+## 可能原因
+
+## 排查步骤
+
+## 建议处理动作
+
+## 风险提示
+
+## 知识库引用
+```
+
+---
+
+#### 29.11.3 Ingress / Service 诊断 Prompt
+
+```text
+你是一个资深银行生产 Kubernetes 入口流量排查专家。
+
+请基于 Ingress、Service、Endpoint、Pod Ready 状态、Nginx Ingress 日志、指标样本和知识库内容，分析访问异常原因。
+
+重点关注：
+1. Ingress 规则是否正确指向 Service。
+2. Service selector 是否能匹配到 Pod。
+3. Endpoint 是否为空。
+4. Endpoint 对应 Pod 是否 Ready。
+5. targetPort 是否和容器端口一致。
+6. Nginx Ingress 是否存在 502、503、504、499、upstream timeout、no endpoints available 等日志。
+7. 不要编造不存在的 host、path、service、endpoint 或日志。
+
+用户问题：
+{{question}}
+
+Ingress 信息：
+{{ingress_info}}
+
+Service 信息：
+{{service_info}}
+
+Endpoint 信息：
+{{endpoint_info}}
+
+后端 Pod 信息：
+{{backend_pods}}
+
+Nginx Ingress 日志：
+{{ingress_logs}}
+
+指标样本：
+{{metric_samples}}
+
+知识库内容：
+{{chunks}}
+
+请按以下格式回答：
+
+## 异常摘要
+
+## 访问链路证据
+
+## 日志证据
+
+## 可能原因
+
+## 建议排查步骤
+
+## 风险提示
+
+## 知识库引用
+```
+
+---
+
+### 29.12 LogAnalysisService 与 K8sDiagnosisService 关系
+
+现有 LogAnalysisService 继续负责 Elasticsearch 和服务器日志文件分析。
+
+新增 K8sDiagnosisService 负责 K8s 上下文采集和 K8s 告警诊断。
+
+二者关系：
+
+```text
+K8sDiagnosisService
+    ↓
+K8sCollectorService 采集 Kubernetes 上下文
+    ↓
+可选调用 LogAnalysisService 获取关联日志样本
+    ↓
+可选调用 PrometheusClient 获取指标样本
+    ↓
+调用 RAGService 检索知识库
+    ↓
+组装 K8s Prompt
+    ↓
+调用默认 LLM
+    ↓
+保存 k8s_diagnosis_task
+```
+
+---
+
+### 29.13 前端页面扩展
+
+#### 29.13.1 K8sClusterPage
+
+功能：
+
+```text
+1. 查看 K8s 集群列表
+2. 新增 K8s 集群配置
+3. 支持 kubeconfig、bearer_token、in_cluster 三种认证方式
+4. 配置 allowed_namespaces
+5. 测试集群连接
+6. 启用或禁用集群
+7. 不展示明文 token、kubeconfig、证书或私钥
+```
+
+---
+
+#### 29.13.2 K8sDiagnosisPage
+
+功能：
+
+```text
+1. 选择集群
+2. 选择诊断类型：告警、Pod、Ingress、Service、Node
+3. 输入 namespace、pod、container、service、ingress、node 等参数
+4. 可粘贴 Alertmanager 告警 JSON
+5. 可选择是否采集日志
+6. 可选择是否采集 previous logs
+7. 可选择是否关联 Prometheus 指标
+8. 提交诊断
+9. 展示异常摘要、关键证据、可能原因、建议排查步骤、风险提示
+10. 展示 K8s 采集上下文摘要
+11. 展示日志证据
+12. 展示知识库引用
+13. 提示 AI 分析仅供排查参考
+```
+
+---
+
+#### 29.13.3 前端 API 扩展
+
+新增文件：
+
+```text
+frontend/src/api/k8sApi.ts
+```
+
+需要实现：
+
+```ts
+export async function listK8sClusters()
+
+export async function createK8sCluster(data: {
+  name: string
+  environment?: string
+  apiServer: string
+  authType: 'kubeconfig' | 'bearer_token' | 'in_cluster'
+  kubeconfig?: string
+  bearerToken?: string
+  caCert?: string
+  clientCert?: string
+  clientKey?: string
+  allowedNamespaces: string[]
+  enabled?: boolean
+})
+
+export async function updateK8sCluster(id: number, data: Partial<K8sClusterInput>)
+
+export async function deleteK8sCluster(id: number)
+
+export async function testK8sCluster(id: number)
+
+export async function diagnoseK8sAlert(data: {
+  clusterId: number
+  alertName?: string
+  severity?: string
+  namespace: string
+  podName?: string
+  containerName?: string
+  workloadKind?: string
+  workloadName?: string
+  serviceName?: string
+  ingressName?: string
+  nodeName?: string
+  question?: string
+  timeStart?: string
+  timeEnd?: string
+  topK?: number
+})
+
+export async function diagnoseK8sPod(data: {
+  clusterId: number
+  namespace: string
+  podName: string
+  containerName?: string
+  question?: string
+  includeLogs?: boolean
+  includePreviousLogs?: boolean
+  includeMetrics?: boolean
+  topK?: number
+})
+
+export async function diagnoseK8sIngress(data: {
+  clusterId: number
+  namespace: string
+  ingressName: string
+  question?: string
+  includeNginxIngressLogs?: boolean
+  includeMetrics?: boolean
+  topK?: number
+})
+
+export async function diagnoseK8sService(data: {
+  clusterId: number
+  namespace: string
+  serviceName: string
+  question?: string
+  topK?: number
+})
+
+export async function diagnoseK8sNode(data: {
+  clusterId: number
+  nodeName: string
+  question?: string
+  includeMetrics?: boolean
+  topK?: number
+})
+```
+
+---
+
+### 29.14 环境变量扩展
+
+```env
+K8S_COLLECT_TIMEOUT_SECONDS=15
+K8S_LOG_TAIL_LINES=300
+K8S_LOG_MAX_BYTES=262144
+K8S_LOG_PREVIOUS_ENABLED=true
+K8S_ALLOWED_ALL_NAMESPACES=false
+
+PROMETHEUS_ENABLED=false
+PROMETHEUS_BASE_URL=http://prometheus.internal.local:9090
+PROMETHEUS_QUERY_TIMEOUT_SECONDS=10
+```
+
+说明：
+
+```text
+K8S_ALLOWED_ALL_NAMESPACES 默认 false。
+生产环境不允许默认查询所有 namespace。
+如果需要跨 namespace 查询，必须在集群配置 allowed_namespaces 中显式配置。
+```
+
+---
+
+### 29.15 安全要求扩展
+
+在原有安全要求基础上增加：
+
+```text
+1. K8s 集群凭据必须加密保存。
+2. API 返回 K8s 集群配置时不得返回明文 token、kubeconfig、证书或私钥。
+3. K8s 查询必须限制在 allowed_namespaces 内。
+4. 不允许默认访问所有 namespace。
+5. 不允许读取 Secret 明文。
+6. 默认不读取 ConfigMap 内容。
+7. 不允许调用 exec、attach、port-forward。
+8. 不允许 create、update、patch、delete Kubernetes 资源。
+9. 不允许自动执行 kubectl 命令。
+10. Pod 日志进入 LLM 前必须脱敏。
+11. Pod 日志读取必须限制行数和字节数。
+12. K8s 诊断结果只能作为排查建议，不允许自动执行修复动作。
+13. 涉及删除、重启、扩容、缩容、回滚、修改配置、修改网络规则、节点隔离、节点驱逐等动作，必须提示生产变更审批。
+14. 后端需要记录 K8s 诊断任务和返回结果，方便审计。
+```
+
+---
+
+### 29.16 Codex 开发任务扩展
+
+### Task 17：K8s 数据库模型和迁移
+
+目标：
+
+```text
+创建 k8s_cluster、k8s_diagnosis_task 表。
+```
+
+验收标准：
+
+```text
+1. migrations 中包含 K8s 表结构。
+2. GORM model 与表结构对应。
+3. k8s_cluster 可以保存集群基础配置。
+4. K8s 凭据字段只保存加密引用，不保存明文。
+```
+
+---
+
+### Task 18：K8s 集群配置管理
+
+目标：
+
+```text
+实现 K8s 集群配置的新增、查询、更新、删除、测试连接。
+```
+
+验收标准：
+
+```text
+1. 可以创建 K8s 集群配置。
+2. 支持 kubeconfig、bearer_token、in_cluster 认证方式。
+3. token、kubeconfig、证书、私钥加密保存。
+4. 查询接口不返回明文凭据。
+5. 可以配置 allowed_namespaces。
+6. 可以测试 Kubernetes API 连接。
+```
+
+---
+
+### Task 19：KubernetesClient 实现
+
+目标：
+
+```text
+使用 client-go 实现 Kubernetes 只读采集客户端。
+```
+
+验收标准：
+
+```text
+1. 可以读取 Pod 状态。
+2. 可以读取 Pod Events。
+3. 可以读取 Pod 当前日志。
+4. 可以读取 Pod previous 日志。
+5. 可以读取 Deployment、StatefulSet、DaemonSet、ReplicaSet。
+6. 可以读取 Service、Endpoint、EndpointSlice。
+7. 可以读取 Ingress、HPA、PVC。
+8. 可选读取 Node。
+9. 不通过 shell 执行 kubectl。
+10. 不实现 exec、attach、port-forward、delete、patch、apply。
+```
+
+---
+
+### Task 20：K8s 采集上下文构造
+
+目标：
+
+```text
+实现 K8sCollectorService 和 K8sContextBuilder。
+```
+
+验收标准：
+
+```text
+1. 输入 clusterId、namespace、podName 后，可以构造 Pod 诊断上下文。
+2. 输入 ingressName 后，可以构造 Ingress 访问链路上下文。
+3. 输入 serviceName 后，可以构造 Service / Endpoint 上下文。
+4. 采集前校验 namespace 是否在 allowed_namespaces 内。
+5. 日志采集有行数和字节数限制。
+6. 进入 LLM 前完成脱敏。
+```
+
+---
+
+### Task 21：K8s 告警诊断
+
+目标：
+
+```text
+实现 /api/k8s/diagnosis/alert。
+```
+
+验收标准：
+
+```text
+1. 可以接收 Alertmanager 告警字段。
+2. 可以根据 alertName 判断采集策略。
+3. 可以自动补充 Pod、Events、Logs、Workload、Service、Endpoint 等上下文。
+4. 可以检索相关 published 知识库文档。
+5. 可以组装 K8s 告警分析 Prompt。
+6. 可以调用默认 LLM 生成诊断结果。
+7. 可以保存 k8s_diagnosis_task。
+```
+
+---
+
+### Task 22：K8s Pod 诊断
+
+目标：
+
+```text
+实现 /api/k8s/diagnosis/pod。
+```
+
+验收标准：
+
+```text
+1. 可以输入 namespace、podName、containerName。
+2. 可以读取 Pod 状态、Events、当前日志和 previous 日志。
+3. 可以反查所属 Workload。
+4. 可以关联 Service / Endpoint。
+5. 可以调用 LLM 输出异常摘要、关键证据、可能原因、建议排查步骤和风险提示。
+```
+
+---
+
+### Task 23：K8s Ingress / Service 诊断
+
+目标：
+
+```text
+实现 /api/k8s/diagnosis/ingress 和 /api/k8s/diagnosis/service。
+```
+
+验收标准：
+
+```text
+1. Ingress 诊断可以采集 Ingress、Service、Endpoint、后端 Pod。
+2. Service 诊断可以采集 Service selector、Endpoint、Pod Ready 状态。
+3. 可以识别 Endpoint 为空、selector 不匹配、Pod 未 Ready、targetPort 异常等问题。
+4. 可以调用 LLM 生成访问链路分析。
+```
+
+---
+
+### Task 24：K8s 前端页面
+
+目标：
+
+```text
+实现 K8sClusterPage 和 K8sDiagnosisPage。
+```
+
+验收标准：
+
+```text
+1. 可以管理 K8s 集群配置。
+2. 可以配置 allowed_namespaces。
+3. 可以测试集群连接。
+4. 可以提交 Pod 诊断。
+5. 可以提交告警诊断。
+6. 可以提交 Ingress / Service 诊断。
+7. 可以展示异常摘要、关键证据、可能原因、排查建议、风险提示、知识库引用。
+8. 页面提示 AI 分析仅供排查参考。
+```
+
+---
+
+### 29.17 第一阶段 K8s MVP 范围
+
+### 必须实现
+
+```text
+1. K8s 集群配置
+2. K8s 集群连接测试
+3. allowed_namespaces 控制
+4. Pod 状态采集
+5. Pod Events 采集
+6. Pod 当前日志采集
+7. Pod previous 日志采集
+8. Deployment / StatefulSet / ReplicaSet 采集
+9. Service / Endpoint 采集
+10. K8s Pod 诊断接口
+11. K8s 告警诊断接口
+12. K8s Prompt
+13. K8s 诊断结果保存
+14. 前端 K8s 集群配置页面
+15. 前端 K8s 诊断页面
+```
+
+### 可以暂缓
+
+```text
+1. Node 诊断
+2. PV / StorageClass 诊断
+3. HPA 诊断
+4. Prometheus 指标接入
+5. Nginx Ingress Controller 日志自动关联
+6. Alertmanager Webhook 自动接入
+7. 多集群权限管理
+8. 与工单系统联动
+9. 诊断报告导出
+10. 实时事件流监听
+```
+
+---
+
+### 29.18 K8s 示例告警测试
+
+可以使用以下 Alertmanager 告警测试：
+
+```json
+{
+  "alertName": "KubePodCrashLooping",
+  "severity": "critical",
+  "cluster": "prod-k8s-01",
+  "namespace": "pay",
+  "pod": "pay-core-6f8b7d9c7d-xk2lm",
+  "container": "pay-core",
+  "summary": "Pod is crash looping",
+  "description": "Pod pay/pay-core-6f8b7d9c7d-xk2lm is restarting frequently"
+}
+```
+
+期望回答应该包含：
+
+```text
+1. Pod 当前状态
+2. restartCount
+3. lastState reason
+4. Events 中的 BackOff 或异常原因
+5. previous logs 中的关键错误
+6. 可能原因
+7. 建议排查步骤
+8. 不建议直接删除 Pod
+9. 如需重启、回滚、扩容，必须走生产变更审批
+10. 知识库引用
+```

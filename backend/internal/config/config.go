@@ -31,6 +31,8 @@ type Config struct {
 	LogTimeoutSec   int
 	SSHTimeoutSec   int
 	ESTimeoutSec    int
+	K8sLogTailLines int
+	K8sLogMaxBytes  int
 	LogLevel        string
 	LogFormat       string
 }
@@ -60,6 +62,8 @@ func Load() *Config {
 		LogTimeoutSec:   getEnvInt("LOG_ANALYSIS_TIMEOUT_SECONDS", 60),
 		SSHTimeoutSec:   getEnvInt("SSH_CONNECT_TIMEOUT_SECONDS", 10),
 		ESTimeoutSec:    getEnvInt("ES_QUERY_TIMEOUT_SECONDS", 15),
+		K8sLogTailLines: getEnvInt("K8S_LOG_TAIL_LINES", 300),
+		K8sLogMaxBytes:  getEnvInt("K8S_LOG_MAX_BYTES", 262144),
 		LogLevel:        getEnv("LOG_LEVEL", "info"),
 		LogFormat:       getEnv("LOG_FORMAT", "json"),
 	}

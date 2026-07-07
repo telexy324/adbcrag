@@ -16,6 +16,7 @@ type Handlers struct {
 	LogSource       *handler.LogSourceHandler
 	LogAnalysis     *handler.LogAnalysisHandler
 	LLMConfig       *handler.LLMConfigHandler
+	K8s             *handler.K8sHandler
 }
 
 func New(handlers Handlers) *gin.Engine {
@@ -47,5 +48,14 @@ func New(handlers Handlers) *gin.Engine {
 	api.POST("/llm-configs/:id/default", handlers.LLMConfig.SetDefault)
 	api.POST("/llm-configs/:id/test", handlers.LLMConfig.Test)
 	api.POST("/qa/ask", handlers.QA.Ask)
+	api.GET("/k8s/clusters", handlers.K8s.ListClusters)
+	api.POST("/k8s/clusters", handlers.K8s.CreateCluster)
+	api.PUT("/k8s/clusters/:id", handlers.K8s.UpdateCluster)
+	api.DELETE("/k8s/clusters/:id", handlers.K8s.DeleteCluster)
+	api.POST("/k8s/clusters/:id/test", handlers.K8s.TestCluster)
+	api.POST("/k8s/diagnosis/alert", handlers.K8s.DiagnoseAlert)
+	api.POST("/k8s/diagnosis/pod", handlers.K8s.DiagnosePod)
+	api.POST("/k8s/diagnosis/ingress", handlers.K8s.DiagnoseIngress)
+	api.POST("/k8s/diagnosis/service", handlers.K8s.DiagnoseService)
 	return r
 }

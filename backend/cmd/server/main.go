@@ -29,7 +29,7 @@ func main() {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
 		fatal("enable pg_trgm", err)
 	}
-	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}, &model.LLMConfig{}); err != nil {
+	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}, &model.LLMConfig{}, &model.K8sCluster{}, &model.K8sDiagnosisTask{}); err != nil {
 		fatal("auto migrate", err)
 	}
 	if err := ensureSearchIndexes(db); err != nil {
@@ -44,9 +44,12 @@ func main() {
 	logSourceRepo := repository.NewLogSourceRepository(db)
 	logAnalysisRepo := repository.NewLogAnalysisRepository(db)
 	llmConfigRepo := repository.NewLLMConfigRepository(db)
+	k8sClusterRepo := repository.NewK8sClusterRepository(db)
+	k8sDiagnosisRepo := repository.NewK8sDiagnosisRepository(db)
 	credentialCrypto := security.NewCredentialCrypto(cfg.CredentialKey)
 	esClient := client.NewElasticsearchClient()
 	sshClient := client.NewSSHLogClient()
+	k8sClient := client.NewK8sClient()
 	llmConfigSvc := service.NewLLMConfigService(cfg, llmConfigRepo, credentialCrypto)
 	llmClient := service.NewDynamicLLMClient(llmConfigSvc)
 
@@ -58,6 +61,7 @@ func main() {
 	criteriaSvc := service.NewQualityCriteriaService(criteriaRepo)
 	logSourceSvc := service.NewLogSourceService(cfg, logSourceRepo, credentialCrypto, esClient, sshClient)
 	logAnalysisSvc := service.NewLogAnalysisService(cfg, logSourceSvc, logAnalysisRepo, chunkRepo, esClient, sshClient, llmClient)
+	k8sSvc := service.NewK8sService(cfg, k8sClusterRepo, k8sDiagnosisRepo, chunkRepo, credentialCrypto, k8sClient, llmClient)
 
 	r := router.New(router.Handlers{
 		Health: handler.NewHealthHandler(), Document: handler.NewDocumentHandler(documentSvc),
@@ -66,6 +70,7 @@ func main() {
 		LogSource:       handler.NewLogSourceHandler(logSourceSvc),
 		LogAnalysis:     handler.NewLogAnalysisHandler(logAnalysisSvc),
 		LLMConfig:       handler.NewLLMConfigHandler(llmConfigSvc),
+		K8s:             handler.NewK8sHandler(k8sSvc),
 	})
 	logger.Info(context.Background(), "server listening", "port", cfg.AppPort, "env", cfg.AppEnv, "log_level", cfg.LogLevel, "log_format", cfg.LogFormat)
 	if err := r.Run(":" + cfg.AppPort); err != nil {

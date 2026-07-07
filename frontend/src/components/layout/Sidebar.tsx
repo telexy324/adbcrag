@@ -1,4 +1,4 @@
-import { Bot, ClipboardList, FileCheck, FileText, Home, MessageSquare, SearchCode, ServerCog, Upload } from 'lucide-react'
+import { Bot, ClipboardList, FileCheck, FileText, Home, MessageSquare, Network, SearchCode, ServerCog, Upload } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { cn } from '../../lib/utils'
 
@@ -10,6 +10,8 @@ const items = [
   { to: '/llm-configs', label: '模型接口', icon: Bot },
   { to: '/log-sources', label: '日志源', icon: ServerCog },
   { to: '/log-analysis', label: '日志分析', icon: SearchCode },
+  { to: '/k8s-clusters', label: 'K8s 集群', icon: Network },
+  { to: '/k8s-diagnosis', label: 'K8s 诊断', icon: SearchCode },
   { to: '/chat', label: '知识问答', icon: MessageSquare },
   { to: '/review', label: '审核发布', icon: FileCheck },
 ]

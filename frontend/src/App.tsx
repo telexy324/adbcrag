@@ -8,6 +8,8 @@ import { DocumentUploadPage } from './pages/DocumentUploadPage'
 import { LogAnalysisPage } from './pages/LogAnalysisPage'
 import { LogSourcePage } from './pages/LogSourcePage'
 import { LLMConfigPage } from './pages/LLMConfigPage'
+import { K8sClusterPage } from './pages/K8sClusterPage'
+import { K8sDiagnosisPage } from './pages/K8sDiagnosisPage'
 import { QualityCriteriaPage } from './pages/QualityCriteriaPage'
 import { ReviewPage } from './pages/ReviewPage'
 
@@ -23,6 +25,8 @@ export function App() {
         <Route path="llm-configs" element={<LLMConfigPage />} />
         <Route path="log-sources" element={<LogSourcePage />} />
         <Route path="log-analysis" element={<LogAnalysisPage />} />
+        <Route path="k8s-clusters" element={<K8sClusterPage />} />
+        <Route path="k8s-diagnosis" element={<K8sDiagnosisPage />} />
         <Route path="chat" element={<ChatPage />} />
         <Route path="review" element={<ReviewPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
