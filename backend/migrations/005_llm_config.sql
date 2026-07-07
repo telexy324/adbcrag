@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS llm_config (
     base_url TEXT NOT NULL,
     model VARCHAR(120) NOT NULL,
     api_key_ref TEXT,
+    api_secret_ref TEXT,
     temperature DOUBLE PRECISION DEFAULT 0.2,
     is_default BOOLEAN DEFAULT false,
     enabled BOOLEAN DEFAULT true,
@@ -15,3 +16,5 @@ CREATE TABLE IF NOT EXISTS llm_config (
 
 CREATE INDEX IF NOT EXISTS idx_llm_config_default ON llm_config(is_default);
 CREATE INDEX IF NOT EXISTS idx_llm_config_provider ON llm_config(provider);
+
+ALTER TABLE llm_config ADD COLUMN IF NOT EXISTS api_secret_ref TEXT;

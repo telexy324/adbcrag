@@ -23,6 +23,7 @@ type FormState = {
   baseUrl: string
   model: string
   apiKey: string
+  apiSecret: string
   temperature: number
   isDefault: boolean
   enabled: boolean
@@ -40,6 +41,7 @@ const emptyForm: FormState = {
   baseUrl: presets.qwen3.baseUrl,
   model: presets.qwen3.model,
   apiKey: '',
+  apiSecret: '',
   temperature: 0.2,
   isDefault: false,
   enabled: true,
@@ -59,6 +61,7 @@ export function LLMConfigPage() {
         baseUrl: value.baseUrl,
         model: value.model,
         apiKey: value.apiKey || undefined,
+        apiSecret: value.apiSecret || undefined,
         temperature: value.temperature,
         isDefault: value.isDefault,
         enabled: value.enabled,
@@ -103,6 +106,7 @@ export function LLMConfigPage() {
       baseUrl: item.baseUrl,
       model: item.model,
       apiKey: '',
+      apiSecret: '',
       temperature: item.temperature,
       isDefault: item.isDefault,
       enabled: item.enabled,
@@ -129,6 +133,7 @@ export function LLMConfigPage() {
             <Input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="Base URL，例如 /v1 上一级地址" required />
             <Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder="模型名，如 qwen3-plus" required />
             <Input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={form.id ? 'API Key 不填则保持不变' : 'API Key'} />
+            <Input type="password" value={form.apiSecret} onChange={(e) => setForm({ ...form, apiSecret: e.target.value })} placeholder={form.id ? 'API Secret 不填则保持不变' : 'API Secret'} />
             <Input type="number" step="0.1" min="0" max="2" value={form.temperature} onChange={(e) => setForm({ ...form, temperature: Number(e.target.value) })} placeholder="Temperature" />
             <div className="flex flex-wrap gap-4 text-sm text-slate-700">
               <label className="inline-flex items-center gap-2">

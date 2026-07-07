@@ -100,11 +100,15 @@ func (s *LLMConfigService) clientForConfig(item *model.LLMConfig) (client.DeepSe
 	if err != nil {
 		return nil, err
 	}
+	apiSecret, err := s.crypto.Decrypt(item.APISecretRef)
+	if err != nil {
+		return nil, err
+	}
 	provider := item.Provider
 	if provider == "" {
 		provider = model.LLMProviderOpenAICompatible
 	}
-	return client.NewOpenAICompatibleLLMClient(provider, item.BaseURL, apiKey, item.Model), nil
+	return client.NewOpenAICompatibleLLMClientWithSecret(provider, item.BaseURL, apiKey, apiSecret, item.Model), nil
 }
 
 func (s *LLMConfigService) buildConfig(req dto.SaveLLMConfigRequest, existing *model.LLMConfig) (*model.LLMConfig, error) {
@@ -135,8 +139,10 @@ func (s *LLMConfigService) buildConfig(req dto.SaveLLMConfigRequest, existing *m
 		isDefault = existing.IsDefault
 	}
 	apiKeyRef := ""
+	apiSecretRef := ""
 	if existing != nil {
 		apiKeyRef = existing.APIKeyRef
+		apiSecretRef = existing.APISecretRef
 	}
 	if req.APIKey != "" {
 		encrypted, err := s.crypto.Encrypt(req.APIKey)
@@ -145,9 +151,16 @@ func (s *LLMConfigService) buildConfig(req dto.SaveLLMConfigRequest, existing *m
 		}
 		apiKeyRef = encrypted
 	}
+	if req.APISecret != "" {
+		encrypted, err := s.crypto.Encrypt(req.APISecret)
+		if err != nil {
+			return nil, err
+		}
+		apiSecretRef = encrypted
+	}
 	return &model.LLMConfig{
 		Name: name, Provider: provider, BaseURL: baseURL, Model: modelName,
-		APIKeyRef: apiKeyRef, Temperature: temperature, Enabled: enabled, IsDefault: isDefault,
+		APIKeyRef: apiKeyRef, APISecretRef: apiSecretRef, Temperature: temperature, Enabled: enabled, IsDefault: isDefault,
 	}, nil
 }
 

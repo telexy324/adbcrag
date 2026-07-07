@@ -32,11 +32,12 @@ type DeepSeekClient interface {
 }
 
 type OpenAICompatibleDeepSeekClient struct {
-	provider string
-	baseURL  string
-	apiKey   string
-	model    string
-	http     *http.Client
+	provider  string
+	baseURL   string
+	apiKey    string
+	apiSecret string
+	model     string
+	http      *http.Client
 }
 
 func NewDeepSeekClient(baseURL, apiKey, model string) DeepSeekClient {
@@ -44,12 +45,17 @@ func NewDeepSeekClient(baseURL, apiKey, model string) DeepSeekClient {
 }
 
 func NewOpenAICompatibleLLMClient(provider, baseURL, apiKey, model string) DeepSeekClient {
+	return NewOpenAICompatibleLLMClientWithSecret(provider, baseURL, apiKey, "", model)
+}
+
+func NewOpenAICompatibleLLMClientWithSecret(provider, baseURL, apiKey, apiSecret, model string) DeepSeekClient {
 	return &OpenAICompatibleDeepSeekClient{
-		provider: provider,
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		apiKey:   apiKey,
-		model:    model,
-		http:     &http.Client{Timeout: 60 * time.Second},
+		provider:  provider,
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		apiKey:    apiKey,
+		apiSecret: apiSecret,
+		model:     model,
+		http:      &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -62,6 +68,10 @@ func (c *OpenAICompatibleDeepSeekClient) Chat(ctx context.Context, messages []Ch
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+	if c.apiSecret != "" {
+		req.Header.Set("X-API-Secret", c.apiSecret)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

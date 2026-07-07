@@ -6,6 +6,7 @@ type SaveLLMConfigRequest struct {
 	BaseURL     string   `json:"baseUrl" binding:"required"`
 	Model       string   `json:"model" binding:"required"`
 	APIKey      string   `json:"apiKey"`
+	APISecret   string   `json:"apiSecret"`
 	Temperature *float64 `json:"temperature"`
 	IsDefault   *bool    `json:"isDefault"`
 	Enabled     *bool    `json:"enabled"`

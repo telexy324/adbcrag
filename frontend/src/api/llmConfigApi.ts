@@ -20,6 +20,7 @@ export type SaveLLMConfigInput = {
   baseUrl: string
   model: string
   apiKey?: string
+  apiSecret?: string
   temperature?: number
   isDefault?: boolean
   enabled?: boolean
