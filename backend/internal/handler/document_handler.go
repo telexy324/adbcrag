@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"ops-kb-rag/backend/internal/dto"
+	"ops-kb-rag/backend/internal/middleware"
 	"ops-kb-rag/backend/internal/repository"
 	"ops-kb-rag/backend/internal/service"
 
@@ -35,7 +36,7 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 		DocType:         c.PostForm("docType"),
 		Tags:            c.PostForm("tags"),
 		QualityCriteria: c.PostForm("qualityCriteria"),
-		CreatedBy:       c.GetHeader("X-User"),
+		CreatedBy:       middleware.CurrentUsername(c),
 	})
 	if err != nil {
 		dto.Error(c, uploadErrorStatus(err), err.Error())

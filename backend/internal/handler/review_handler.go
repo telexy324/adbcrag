@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"ops-kb-rag/backend/internal/dto"
+	"ops-kb-rag/backend/internal/middleware"
 	"ops-kb-rag/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -28,7 +29,7 @@ func (h *ReviewHandler) Review(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	doc, err := h.service.Review(c.Request.Context(), id, req.Action, c.GetHeader("X-User"), req.Comment)
+	doc, err := h.service.Review(c.Request.Context(), id, req.Action, middleware.CurrentUsername(c), req.Comment)
 	if err != nil {
 		dto.Error(c, 500, err.Error())
 		return

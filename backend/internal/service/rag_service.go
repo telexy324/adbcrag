@@ -16,20 +16,31 @@ import (
 )
 
 type RAGService struct {
-	cfg    *config.Config
-	chunks *repository.ChunkRepository
-	qa     *repository.QARepository
-	llm    client.DeepSeekClient
+	cfg           *config.Config
+	chunks        *repository.ChunkRepository
+	qa            *repository.QARepository
+	llm           client.DeepSeekClient
+	conversations *ConversationService
 }
 
-func NewRAGService(cfg *config.Config, chunks *repository.ChunkRepository, qa *repository.QARepository, llm client.DeepSeekClient) *RAGService {
-	return &RAGService{cfg: cfg, chunks: chunks, qa: qa, llm: llm}
+func NewRAGService(cfg *config.Config, chunks *repository.ChunkRepository, qa *repository.QARepository, llm client.DeepSeekClient, conversations *ConversationService) *RAGService {
+	return &RAGService{cfg: cfg, chunks: chunks, qa: qa, llm: llm, conversations: conversations}
 }
 
-func (s *RAGService) Ask(ctx context.Context, req dto.AskQuestionRequest) (*dto.AskQuestionResponse, error) {
+func (s *RAGService) Ask(ctx context.Context, req dto.AskQuestionRequest, userID uint64, username, role string) (*dto.AskQuestionResponse, error) {
 	if req.TopK <= 0 {
 		req.TopK = s.cfg.RAGTopK
 	}
+	conversation, err := s.conversations.Ensure(ctx, userID, role, req.ConversationID, req.Question)
+	if err != nil {
+		return nil, err
+	}
+	userMessage, err := s.conversations.AddMessage(ctx, conversation, userID, "user", req.Question, map[string]any{"systemName": req.SystemName, "componentName": req.ComponentName, "docType": req.DocType})
+	if err != nil {
+		return nil, err
+	}
+	recentMessages, _ := s.conversations.RecentMessages(ctx, conversation.ID, 10)
+	conversationSummary := s.conversations.Summary(ctx, conversation.ID)
 	analysis := s.rewriteQuery(ctx, req)
 	results, err := s.chunks.KeywordSearch(ctx, repository.SearchFilter{
 		SystemName: req.SystemName, ComponentName: req.ComponentName, DocType: req.DocType,
@@ -48,19 +59,29 @@ func (s *RAGService) Ask(ctx context.Context, req dto.AskQuestionRequest) (*dto.
 	}
 	if len(results) == 0 {
 		answer := "知识库中未找到明确依据。AI 回答仅供运维排查参考，生产操作请遵守变更审批流程。"
-		_ = s.saveRecord(ctx, req.Question, answer, s.cfg.DeepSeekModel, citations)
-		return &dto.AskQuestionResponse{Answer: answer, Citations: citations}, nil
+		_ = s.saveRecord(ctx, req.Question, answer, s.cfg.DeepSeekModel, citations, userID, conversation.ID, username)
+		assistantMessage, _ := s.conversations.AddMessage(ctx, conversation, userID, "assistant", answer, map[string]any{"citations": citations})
+		_ = s.conversations.UpdateSummary(ctx, conversation.ID)
+		return &dto.AskQuestionResponse{Answer: answer, Citations: citations, ConversationID: conversation.ID, MessageID: chooseMessageID(assistantMessage, userMessage.ID)}, nil
 	}
-	prompt := buildRAGPrompt(req.Question, results)
+	prompt := buildRAGPrompt(req.Question, results, username, conversationSummary, recentMessages)
+	_ = s.conversations.SaveSnapshot(ctx, userID, conversation.ID, userMessage.ID, "qa_prompt", map[string]any{
+		"username": username, "conversationSummary": conversationSummary, "recentMessages": recentMessages, "chunks": citations,
+	})
 	resp, err := s.llm.Chat(ctx, []client.ChatMessage{{Role: "user", Content: prompt}})
 	if err != nil {
 		return nil, err
 	}
 	answer := ensureSafety(resp.Content)
-	if err := s.saveRecord(ctx, req.Question, answer, chooseNonEmpty(resp.Model, s.cfg.DeepSeekModel), citations); err != nil {
+	if err := s.saveRecord(ctx, req.Question, answer, chooseNonEmpty(resp.Model, s.cfg.DeepSeekModel), citations, userID, conversation.ID, username); err != nil {
 		return nil, err
 	}
-	return &dto.AskQuestionResponse{Answer: answer, Citations: citations}, nil
+	assistantMessage, err := s.conversations.AddMessage(ctx, conversation, userID, "assistant", answer, map[string]any{"citations": citations})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.conversations.UpdateSummary(ctx, conversation.ID)
+	return &dto.AskQuestionResponse{Answer: answer, Citations: citations, ConversationID: conversation.ID, MessageID: assistantMessage.ID}, nil
 }
 
 type QueryAnalysis struct {
@@ -150,17 +171,22 @@ func (s *RAGService) rerank(ctx context.Context, question string, candidates []r
 	return reranked
 }
 
-func (s *RAGService) saveRecord(ctx context.Context, question, answer, modelName string, citations []dto.Citation) error {
+func (s *RAGService) saveRecord(ctx context.Context, question, answer, modelName string, citations []dto.Citation, userID, conversationID uint64, createdBy string) error {
 	data, _ := json.Marshal(citations)
 	return s.qa.Create(ctx, &model.QARecord{
 		Question: question, Answer: answer, RetrievedChunks: datatypes.JSON(data), ModelName: modelName,
+		UserID: userID, ConversationID: conversationID, CreatedBy: createdBy,
 	})
 }
 
-func buildRAGPrompt(question string, chunks []repository.SearchResult) string {
+func buildRAGPrompt(question string, chunks []repository.SearchResult, username, summary string, messages []model.ConversationMessage) string {
 	var b strings.Builder
 	for i, chunk := range chunks {
 		fmt.Fprintf(&b, "引用 %d：文档《%s》章节「%s」\n%s\n\n", i+1, chunk.DocumentTitle, chunk.SourceSection, chunk.Content)
+	}
+	var mb strings.Builder
+	for _, message := range messages {
+		fmt.Fprintf(&mb, "%s：%s\n", message.Role, truncate(message.Content, 500))
 	}
 	return fmt.Sprintf(`你是一个资深银行生产运维专家。
 
@@ -173,6 +199,16 @@ func buildRAGPrompt(question string, chunks []repository.SearchResult) string {
 4. 涉及重启、删除、清理、扩容、切换、回滚等高风险操作时，必须提示需要按生产变更流程审批。
 5. 回答要结构清晰。
 6. 最后列出引用来源。
+7. 可以参考【当前用户】、【会话摘要】和【最近消息】理解上下文，但不要泄露其他用户信息。
+
+当前用户：
+%s
+
+会话摘要：
+%s
+
+最近消息：
+%s
 
 用户问题：
 %s
@@ -192,7 +228,7 @@ func buildRAGPrompt(question string, chunks []repository.SearchResult) string {
 
 ## 风险提示
 
-## 引用来源`, question, b.String())
+## 引用来源`, username, summary, mb.String(), question, b.String())
 }
 
 func ensureSafety(answer string) string {
@@ -200,4 +236,11 @@ func ensureSafety(answer string) string {
 		answer += "\n\n风险提示：AI 回答仅供运维排查参考，生产操作请遵守变更审批流程。"
 	}
 	return answer
+}
+
+func chooseMessageID(message *model.ConversationMessage, fallback uint64) uint64 {
+	if message != nil {
+		return message.ID
+	}
+	return fallback
 }

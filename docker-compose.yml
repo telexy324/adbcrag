@@ -44,6 +44,10 @@ services:
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4}
       RAG_TOP_K: ${RAG_TOP_K:-5}
       RAG_RECALL_K: ${RAG_RECALL_K:-30}
+      INIT_ADMIN_USERNAME: ${INIT_ADMIN_USERNAME:-admin}
+      INIT_ADMIN_PASSWORD: ${INIT_ADMIN_PASSWORD:-Admin@123456}
+      JWT_SECRET: ${JWT_SECRET:-change-me-jwt-secret}
+      JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-24}
     ports:
       - "8080:8080"
     volumes:

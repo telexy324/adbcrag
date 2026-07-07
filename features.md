@@ -4299,3 +4299,1754 @@ K8S_ALLOWED_ALL_NAMESPACES 默认 false。
 9. 如需重启、回滚、扩容，必须走生产变更审批
 10. 知识库引用
 ```
+
+---
+
+## 30. 简化用户管理设计
+
+### 30.1 扩展目标
+
+在现有运维知识库 RAG 系统基础上，增加简化用户管理能力。
+
+系统需要支持用户登录，并区分两类角色：
+
+```text
+admin       管理员
+user        普通用户
+```
+
+本阶段不做复杂多租户、不做细粒度系统权限、不做部门级权限模型，只实现最小可用的角色权限控制。
+
+核心目标：
+
+```text
+1. 用户必须登录后才能使用系统。
+2. admin 可以管理普通用户。
+3. admin 可以启用、禁用、重置普通用户密码。
+4. 普通用户只能使用知识库问答、查看自己创建的会话、查看自己提交的分析记录。
+5. admin 可以查看和管理全局数据。
+6. 所有问答、日志分析、文档上传、审核、模型配置、日志源配置都需要记录操作用户。
+7. 系统需要基于登录用户维护上下文。
+```
+
+---
+
+### 30.2 角色权限边界
+
+#### admin 权限
+
+admin 可以执行：
+
+```text
+1. 登录系统
+2. 创建普通用户
+3. 修改普通用户信息
+4. 启用 / 禁用普通用户
+5. 重置普通用户密码
+6. 查看所有用户
+7. 上传文档
+8. 审核文档
+9. 发布文档
+10. 废弃文档
+11. 删除文档
+12. 配置 LLM 接口
+13. 配置 Elasticsearch 日志源
+14. 配置服务器日志源
+15. 配置 K8s 集群
+16. 查看所有问答记录
+17. 查看所有日志分析任务
+18. 查看所有 K8s 诊断任务
+19. 查看系统审计日志
+20. 管理所有会话上下文
+```
+
+#### 普通用户权限
+
+普通用户可以执行：
+
+```text
+1. 登录系统
+2. 修改自己的密码
+3. 查看已发布知识库文档
+4. 发起知识库问答
+5. 创建自己的聊天会话
+6. 查看自己的聊天历史
+7. 删除自己的聊天会话
+8. 发起日志分析
+9. 查看自己的日志分析任务
+10. 发起 K8s 诊断
+11. 查看自己的 K8s 诊断任务
+12. 上传文档草稿或待审核文档
+```
+
+普通用户不允许执行：
+
+```text
+1. 管理其他用户
+2. 审核文档
+3. 发布文档
+4. 配置 LLM 接口
+5. 配置日志源
+6. 配置 K8s 集群
+7. 查看其他用户的问答记录
+8. 查看其他用户的会话上下文
+9. 查看系统审计日志
+10. 启用、禁用、删除其他用户
+```
+
+---
+
+## 31. 用户认证设计
+
+### 31.1 登录方式
+
+第一阶段使用账号密码登录。
+
+```text
+1. 用户使用 username + password 登录。
+2. 后端校验密码。
+3. 登录成功后返回 JWT access_token。
+4. 前端将 token 保存到 localStorage 或 sessionStorage。
+5. 后续请求通过 Authorization: Bearer <token> 访问接口。
+```
+
+密码安全要求：
+
+```text
+1. 数据库只保存 password_hash，不保存明文密码。
+2. 密码使用 bcrypt 哈希。
+3. 创建用户时需要设置初始密码。
+4. 普通用户首次登录后可以修改自己的密码。
+5. admin 可以重置普通用户密码。
+6. 禁用用户不能登录。
+```
+
+### 31.2 JWT 内容
+
+JWT Payload 至少包含：
+
+```json
+{
+  "userId": 1,
+  "username": "admin",
+  "role": "admin",
+  "exp": 1780000000
+}
+```
+
+后端中间件需要解析 JWT，并将当前用户信息注入 Gin Context。
+
+建议注入字段：
+
+```text
+current_user_id
+current_username
+current_user_role
+```
+
+---
+
+## 32. 用户数据库设计
+
+### 32.1 用户表
+
+```sql
+CREATE TABLE app_user (
+    id BIGSERIAL PRIMARY KEY,
+
+    username VARCHAR(100) NOT NULL UNIQUE,
+    display_name VARCHAR(120),
+    password_hash TEXT NOT NULL,
+
+    role VARCHAR(30) NOT NULL DEFAULT 'user',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+
+    last_login_at TIMESTAMP,
+    password_updated_at TIMESTAMP,
+
+    created_by BIGINT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+
+    CONSTRAINT chk_app_user_role CHECK (role IN ('admin', 'user'))
+);
+```
+
+字段说明：
+
+```text
+username             登录账号，唯一
+display_name         显示名称
+password_hash        bcrypt 哈希后的密码
+role                 admin 或 user
+enabled              是否启用
+last_login_at        最近登录时间
+password_updated_at  最近修改密码时间
+created_by           创建该用户的管理员 ID
+```
+
+---
+
+### 32.2 登录审计表
+
+```sql
+CREATE TABLE login_audit (
+    id BIGSERIAL PRIMARY KEY,
+
+    user_id BIGINT REFERENCES app_user(id),
+    username VARCHAR(100),
+
+    success BOOLEAN NOT NULL,
+    failure_reason TEXT,
+
+    client_ip VARCHAR(100),
+    user_agent TEXT,
+
+    created_at TIMESTAMP DEFAULT now()
+);
+```
+
+用途：
+
+```text
+1. 记录登录成功和失败。
+2. 方便后续排查异常登录。
+3. 为后续安全审计预留基础。
+```
+
+---
+
+### 32.3 初始化管理员
+
+系统启动时需要支持初始化 admin 用户。
+
+环境变量：
+
+```env
+INIT_ADMIN_USERNAME=admin
+INIT_ADMIN_PASSWORD=Admin@123456
+JWT_SECRET=change-me-jwt-secret
+JWT_EXPIRE_HOURS=24
+```
+
+初始化规则：
+
+```text
+1. 如果 app_user 表中不存在任何 admin，则自动创建默认 admin。
+2. 如果已经存在 admin，则不重复创建。
+3. 默认密码只能用于开发和首次部署，生产环境必须修改。
+4. 后端启动日志中不得打印明文密码。
+```
+
+---
+
+## 33. 上下文维护设计
+
+### 33.1 设计目标
+
+系统需要基于登录用户维护上下文，但不能只按 user_id 保存全部上下文。
+
+推荐分层：
+
+```text
+user_id
+  └── conversation_id
+        └── task_id
+              └── tool_call_id / evidence_id
+```
+
+各层含义：
+
+```text
+user_id             表示这个上下文属于哪个登录用户
+conversation_id     表示一次聊天会话
+task_id             表示一次具体问答、日志分析、K8s 诊断或排障任务
+tool_call_id        表示一次工具调用或外部数据采集
+evidence_id         表示一次证据记录，例如日志样本、知识库片段、K8s 资源快照
+```
+
+不要只用 user_id 作为上下文 key。
+
+错误示例：
+
+```text
+context_key = user_id
+```
+
+正确示例：
+
+```text
+context_key = user_id + conversation_id
+context_key = user_id + conversation_id + task_id
+```
+
+这样可以避免同一个用户同时排查多个问题时互相污染上下文。
+
+---
+
+### 33.2 上下文类型
+
+系统至少维护以下上下文：
+
+```text
+1. 用户上下文 user_context
+2. 会话上下文 conversation_context
+3. 最近消息 recent_messages
+4. 会话摘要 conversation_summary
+5. 当前任务状态 task_state
+6. 检索上下文 retrieved_context
+7. 工具结果上下文 tool_result_context
+8. 审计上下文 audit_context
+```
+
+### 33.3 用户上下文 user_context
+
+用户上下文来自登录用户，不由 LLM 生成。
+
+示例：
+
+```json
+{
+  "userId": 1,
+  "username": "zhangsan",
+  "role": "user",
+  "enabled": true
+}
+```
+
+用途：
+
+```text
+1. 权限判断
+2. 数据归属
+3. 审计记录
+4. Prompt 中标识当前用户角色
+```
+
+注意：
+
+```text
+普通用户的 user_context 只用于权限和归属，不要把敏感信息传给 LLM。
+```
+
+---
+
+### 33.4 会话上下文 conversation_context
+
+一次聊天窗口对应一个 conversation。
+
+用户可以有多个 conversation。
+
+例如：
+
+```text
+会话 A：Redis 内存告警问答
+会话 B：支付系统日志超时分析
+会话 C：K8s Pod CrashLoopBackOff 诊断
+```
+
+后端需要根据 conversation_id 取对应上下文，不能混用。
+
+---
+
+### 33.5 任务状态 task_state
+
+task_state 用于记录当前会话内正在排查的问题状态。
+
+适用场景：
+
+```text
+1. 知识库连续问答
+2. 日志分析
+3. K8s Pod 诊断
+4. K8s 告警诊断
+5. SQL 慢查询排查
+6. 数据库异常诊断
+```
+
+通用结构：
+
+```json
+{
+  "taskType": "qa | log_analysis | k8s_diagnosis | db_diagnosis",
+  "systemName": "支付系统",
+  "componentName": "Redis",
+  "environment": "prod",
+  "problemSummary": "用户正在排查 Redis 内存告警",
+  "knownFacts": [
+    "知识库命中了 Redis 内存告警处置手册",
+    "用户关注生产环境处理步骤"
+  ],
+  "checkedItems": [
+    "知识库检索",
+    "风险提示"
+  ],
+  "currentConclusion": "需要先查看 info memory、bigkeys 和 slowlog，不建议直接删除 key",
+  "pendingQuestions": [
+    "Redis 实例地址和端口未提供",
+    "当前内存使用率未提供"
+  ],
+  "riskLevel": "medium",
+  "nextActions": [
+    "确认 Redis 内存指标",
+    "查看 bigkey",
+    "查看 slowlog"
+  ]
+}
+```
+
+---
+
+## 34. 上下文数据库设计
+
+### 34.1 会话表
+
+```sql
+CREATE TABLE conversation (
+    id BIGSERIAL PRIMARY KEY,
+
+    user_id BIGINT NOT NULL REFERENCES app_user(id),
+    title VARCHAR(255),
+    conversation_type VARCHAR(50) DEFAULT 'qa',
+
+    system_name VARCHAR(100),
+    component_name VARCHAR(100),
+    environment VARCHAR(50),
+
+    last_message_at TIMESTAMP,
+    archived BOOLEAN DEFAULT false,
+
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+```
+
+字段说明：
+
+```text
+conversation_type    qa、log_analysis、k8s_diagnosis、db_diagnosis
+title                会话标题，可由 LLM 根据首轮问题生成
+archived             用户是否归档该会话
+```
+
+权限规则：
+
+```text
+1. 普通用户只能访问自己的 conversation。
+2. admin 可以访问所有 conversation。
+```
+
+---
+
+### 34.2 会话消息表
+
+```sql
+CREATE TABLE conversation_message (
+    id BIGSERIAL PRIMARY KEY,
+
+    conversation_id BIGINT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+    user_id BIGINT REFERENCES app_user(id),
+
+    role VARCHAR(30) NOT NULL,
+    content TEXT NOT NULL,
+
+    model_name VARCHAR(100),
+    token_count INT DEFAULT 0,
+
+    retrieved_chunks JSONB,
+    citations JSONB,
+    tool_results JSONB,
+
+    created_at TIMESTAMP DEFAULT now(),
+
+    CONSTRAINT chk_conversation_message_role CHECK (role IN ('user', 'assistant', 'system', 'tool'))
+);
+```
+
+用途：
+
+```text
+1. 保存原始多轮对话。
+2. 支持后续上下文拼装。
+3. 支持审计和追溯。
+```
+
+---
+
+### 34.3 会话摘要表
+
+```sql
+CREATE TABLE conversation_summary (
+    id BIGSERIAL PRIMARY KEY,
+
+    conversation_id BIGINT NOT NULL UNIQUE REFERENCES conversation(id) ON DELETE CASCADE,
+
+    summary TEXT,
+    key_facts JSONB,
+    user_constraints JSONB,
+    current_topic TEXT,
+
+    last_message_id BIGINT,
+    version INT DEFAULT 1,
+
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+```
+
+字段说明：
+
+```text
+summary              会话摘要
+key_facts            关键事实，例如系统、组件、报错、结论
+user_constraints     用户明确约束，例如“不要执行命令”“只看知识库依据”
+current_topic        当前话题
+last_message_id      摘要覆盖到哪条消息
+version              摘要版本
+```
+
+---
+
+### 34.4 任务状态表
+
+```sql
+CREATE TABLE task_state (
+    id BIGSERIAL PRIMARY KEY,
+
+    user_id BIGINT NOT NULL REFERENCES app_user(id),
+    conversation_id BIGINT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+
+    task_type VARCHAR(50) NOT NULL,
+    status VARCHAR(50) DEFAULT 'active',
+
+    system_name VARCHAR(100),
+    component_name VARCHAR(100),
+    environment VARCHAR(50),
+
+    state JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+```
+
+字段说明：
+
+```text
+task_type       qa、log_analysis、k8s_diagnosis、db_diagnosis
+status          active、finished、archived
+state           结构化任务状态 JSON
+```
+
+---
+
+### 34.5 工具调用记录表
+
+```sql
+CREATE TABLE tool_call_record (
+    id BIGSERIAL PRIMARY KEY,
+
+    user_id BIGINT REFERENCES app_user(id),
+    conversation_id BIGINT REFERENCES conversation(id),
+    task_state_id BIGINT REFERENCES task_state(id),
+
+    tool_name VARCHAR(100) NOT NULL,
+    tool_type VARCHAR(50),
+
+    request_summary JSONB,
+    result_summary JSONB,
+    raw_result_ref TEXT,
+
+    success BOOLEAN DEFAULT true,
+    error_message TEXT,
+
+    created_at TIMESTAMP DEFAULT now()
+);
+```
+
+用途：
+
+```text
+1. 记录知识库检索、日志读取、K8s 采集、LLM 调用等工具行为。
+2. 原始大结果不直接塞入上下文，只保存引用路径或摘要。
+3. 便于审计和问题复盘。
+```
+
+---
+
+### 34.6 上下文快照表
+
+```sql
+CREATE TABLE context_snapshot (
+    id BIGSERIAL PRIMARY KEY,
+
+    user_id BIGINT REFERENCES app_user(id),
+    conversation_id BIGINT REFERENCES conversation(id),
+    task_state_id BIGINT REFERENCES task_state(id),
+
+    snapshot_type VARCHAR(50) NOT NULL,
+    prompt_context JSONB NOT NULL,
+
+    model_name VARCHAR(100),
+    token_count INT DEFAULT 0,
+
+    created_at TIMESTAMP DEFAULT now()
+);
+```
+
+用途：
+
+```text
+1. 保存每次调用 LLM 前实际使用的上下文。
+2. 方便审计模型回答依据。
+3. 方便排查回答质量问题。
+```
+
+注意：
+
+```text
+1. snapshot 中不得保存密码、token、私钥、连接串等敏感信息。
+2. 日志样本进入 snapshot 前必须脱敏。
+3. 大量日志、K8s 原始资源、ES 原始结果不建议完整保存，只保存摘要和引用。
+```
+
+---
+
+## 35. 现有表结构调整
+
+### 35.1 kb_document 调整
+
+将：
+
+```sql
+created_by VARCHAR(100),
+reviewed_by VARCHAR(100),
+```
+
+调整为：
+
+```sql
+created_by BIGINT REFERENCES app_user(id),
+reviewed_by BIGINT REFERENCES app_user(id),
+```
+
+---
+
+### 35.2 qa_record 调整
+
+原 qa_record 需要增加 user_id 和 conversation_id。
+
+```sql
+ALTER TABLE qa_record
+ADD COLUMN user_id BIGINT REFERENCES app_user(id),
+ADD COLUMN conversation_id BIGINT REFERENCES conversation(id);
+```
+
+建议最终结构：
+
+```sql
+CREATE TABLE qa_record (
+    id BIGSERIAL PRIMARY KEY,
+
+    user_id BIGINT REFERENCES app_user(id),
+    conversation_id BIGINT REFERENCES conversation(id),
+
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+
+    retrieved_chunks JSONB,
+    model_name VARCHAR(100),
+
+    created_at TIMESTAMP DEFAULT now()
+);
+```
+
+---
+
+### 35.3 log_analysis_task 调整
+
+增加：
+
+```sql
+ALTER TABLE log_analysis_task
+ADD COLUMN user_id BIGINT REFERENCES app_user(id),
+ADD COLUMN conversation_id BIGINT REFERENCES conversation(id),
+ADD COLUMN task_state_id BIGINT REFERENCES task_state(id);
+```
+
+原来的 `created_by VARCHAR(100)` 可以改为：
+
+```sql
+created_by BIGINT REFERENCES app_user(id)
+```
+
+---
+
+### 35.4 log_source 调整
+
+原来的 `created_by VARCHAR(100)` 改为：
+
+```sql
+created_by BIGINT REFERENCES app_user(id)
+```
+
+权限要求：
+
+```text
+1. 只有 admin 可以创建、修改、删除日志源。
+2. 普通用户只能选择已启用的日志源进行分析。
+3. 普通用户不能看到日志源凭据字段。
+```
+
+---
+
+### 35.5 k8s_cluster 和 k8s_diagnosis_task 调整
+
+如果系统实现 K8s 扩展，需要同步调整：
+
+```sql
+ALTER TABLE k8s_cluster
+ADD COLUMN created_by BIGINT REFERENCES app_user(id);
+
+ALTER TABLE k8s_diagnosis_task
+ADD COLUMN user_id BIGINT REFERENCES app_user(id),
+ADD COLUMN conversation_id BIGINT REFERENCES conversation(id),
+ADD COLUMN task_state_id BIGINT REFERENCES task_state(id);
+```
+
+权限要求：
+
+```text
+1. 只有 admin 可以配置 K8s 集群。
+2. 普通用户只能使用已启用的 K8s 集群做只读诊断。
+3. 普通用户只能查看自己的 K8s 诊断任务。
+4. admin 可以查看所有诊断任务。
+```
+
+---
+
+## 36. API 扩展设计
+
+### 36.1 登录
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "username": "admin",
+  "password": "Admin@123456"
+}
+```
+
+返回：
+
+```json
+{
+  "accessToken": "jwt-token",
+  "user": {
+    "id": 1,
+    "username": "admin",
+    "displayName": "系统管理员",
+    "role": "admin"
+  }
+}
+```
+
+---
+
+### 36.2 当前用户信息
+
+```http
+GET /api/auth/me
+Authorization: Bearer <token>
+```
+
+返回：
+
+```json
+{
+  "id": 1,
+  "username": "admin",
+  "displayName": "系统管理员",
+  "role": "admin",
+  "enabled": true
+}
+```
+
+---
+
+### 36.3 修改自己的密码
+
+```http
+POST /api/auth/change-password
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "oldPassword": "old-password",
+  "newPassword": "new-password"
+}
+```
+
+---
+
+### 36.4 管理员创建用户
+
+```http
+POST /api/users
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "username": "zhangsan",
+  "displayName": "张三",
+  "password": "User@123456",
+  "role": "user",
+  "enabled": true
+}
+```
+
+---
+
+### 36.5 管理员查询用户列表
+
+```http
+GET /api/users?page=1&pageSize=10&keyword=zhang
+Authorization: Bearer <admin-token>
+```
+
+---
+
+### 36.6 管理员更新用户
+
+```http
+PUT /api/users/{id}
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "displayName": "张三",
+  "role": "user",
+  "enabled": true
+}
+```
+
+限制：
+
+```text
+1. 普通用户不能调用该接口。
+2. admin 不能把最后一个 admin 禁用。
+3. admin 不能把最后一个 admin 改成普通用户。
+```
+
+---
+
+### 36.7 管理员重置用户密码
+
+```http
+POST /api/users/{id}/reset-password
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "newPassword": "NewPassword@123"
+}
+```
+
+---
+
+### 36.8 会话列表
+
+```http
+GET /api/conversations
+Authorization: Bearer <token>
+```
+
+普通用户只返回自己的会话。
+
+admin 可以通过参数查看全部：
+
+```http
+GET /api/conversations?all=true
+Authorization: Bearer <admin-token>
+```
+
+---
+
+### 36.9 创建会话
+
+```http
+POST /api/conversations
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "title": "Redis 内存告警排查",
+  "conversationType": "qa",
+  "systemName": "支付系统",
+  "componentName": "Redis",
+  "environment": "prod"
+}
+```
+
+---
+
+### 36.10 查看会话消息
+
+```http
+GET /api/conversations/{id}/messages
+Authorization: Bearer <token>
+```
+
+权限要求：
+
+```text
+1. 普通用户只能查看自己的会话消息。
+2. admin 可以查看所有会话消息。
+```
+
+---
+
+### 36.11 删除或归档会话
+
+```http
+DELETE /api/conversations/{id}
+Authorization: Bearer <token>
+```
+
+第一阶段建议软删除：
+
+```text
+archived = true
+```
+
+---
+
+### 36.12 知识库问答接口调整
+
+原接口：
+
+```http
+POST /api/qa/ask
+```
+
+请求增加 conversationId：
+
+```json
+{
+  "conversationId": 1001,
+  "question": "Redis 内存告警怎么处理？",
+  "systemName": "支付系统",
+  "componentName": "Redis",
+  "topK": 5
+}
+```
+
+处理规则：
+
+```text
+1. 必须登录。
+2. 如果没有传 conversationId，后端自动创建一个新的 conversation。
+3. 如果传了 conversationId，需要校验该会话是否属于当前用户。
+4. admin 可以访问任意 conversation。
+5. 本轮用户问题写入 conversation_message。
+6. 系统读取最近消息、会话摘要、task_state、知识库检索结果后组装 Prompt。
+7. LLM 回答写入 conversation_message。
+8. 更新 qa_record。
+9. 更新 conversation_summary。
+10. 更新 task_state。
+11. 保存 context_snapshot。
+```
+
+返回增加 conversationId 和 messageId：
+
+```json
+{
+  "conversationId": 1001,
+  "messageId": 9002,
+  "answer": "根据知识库中的 Redis 内存告警处置手册...",
+  "citations": []
+}
+```
+
+---
+
+### 36.13 日志分析接口调整
+
+原接口：
+
+```http
+POST /api/log-analysis
+```
+
+请求增加 conversationId：
+
+```json
+{
+  "conversationId": 1001,
+  "sourceId": 1,
+  "question": "支付接口 9 点后超时增多，可能是什么原因？",
+  "systemName": "支付系统",
+  "componentName": "payment-api",
+  "timeStart": "2026-07-05T09:00:00+08:00",
+  "timeEnd": "2026-07-05T10:00:00+08:00",
+  "keyword": "timeout OR ERROR",
+  "logLevel": "ERROR",
+  "topK": 5
+}
+```
+
+处理规则：
+
+```text
+1. 必须登录。
+2. 普通用户只能看到自己的日志分析任务。
+3. admin 可以看到全部日志分析任务。
+4. 日志分析结果写入 conversation_message。
+5. 日志分析过程更新 task_state。
+6. 工具调用记录写入 tool_call_record。
+7. LLM 调用前保存 context_snapshot。
+```
+
+---
+
+## 37. 上下文 Prompt 组装规则
+
+### 37.1 Prompt 输入优先级
+
+最终传给 LLM 的上下文按以下优先级组织：
+
+```text
+1. 系统安全规则
+2. 当前用户问题
+3. 当前会话任务状态
+4. 当前工具结果摘要
+5. 知识库检索结果
+6. 最近多轮对话
+7. 会话摘要
+8. 用户基础信息
+```
+
+注意：
+
+```text
+当前用户问题优先于历史上下文。
+当前工具结果优先于历史摘要。
+已发布知识库内容优先于模型自身知识。
+普通用户权限边界优先于一切业务逻辑。
+```
+
+---
+
+### 37.2 知识库问答 Prompt 调整版
+
+```text
+你是一个资深银行生产运维专家。
+
+你正在为一个已登录用户提供知识库问答服务。
+
+【当前用户】
+{{user_context}}
+
+【当前会话摘要】
+{{conversation_summary}}
+
+【当前任务状态】
+{{task_state}}
+
+【最近对话】
+{{recent_messages}}
+
+【用户当前问题】
+{{question}}
+
+【知识库内容】
+{{chunks}}
+
+要求：
+1. 请严格基于【知识库内容】和【当前任务状态】回答用户问题。
+2. 不要编造知识库中不存在的信息。
+3. 如果知识库没有相关依据，请明确说明：“知识库中未找到明确依据”。
+4. 如果当前用户问题和历史上下文冲突，以当前用户问题为准。
+5. 如果工具结果和历史摘要冲突，以工具结果为准。
+6. 涉及生产命令时，只能作为排查建议展示，不允许描述为可以直接执行。
+7. 涉及重启、删除、清理、扩容、切换、回滚等高风险操作时，必须提示需要按生产变更流程审批。
+8. 回答要结构清晰。
+9. 最后列出引用来源。
+10. 不要输出用户的敏感信息、token、密码、私钥、连接串。
+
+请按以下格式回答：
+
+## 结论
+
+## 依据
+
+## 排查步骤
+
+## 建议命令
+
+## 风险提示
+
+## 引用来源
+```
+
+---
+
+### 37.3 日志分析 Prompt 调整版
+
+```text
+你是一个资深银行生产运维日志分析专家。
+
+你正在为一个已登录用户分析日志和知识库内容。
+
+【当前用户】
+{{user_context}}
+
+【当前会话摘要】
+{{conversation_summary}}
+
+【当前任务状态】
+{{task_state}}
+
+【最近对话】
+{{recent_messages}}
+
+【用户当前问题】
+{{question}}
+
+【日志来源】
+{{log_source}}
+
+【日志时间范围】
+{{time_range}}
+
+【日志样本】
+{{log_samples}}
+
+【知识库内容】
+{{chunks}}
+
+要求：
+1. 必须区分日志中可以直接观察到的事实、基于知识库的依据、以及推测性的可能原因。
+2. 不要编造日志中不存在的错误、时间点、接口、主机或指标。
+3. 如果知识库没有相关依据，请明确说明：“知识库中未找到明确依据”。
+4. 如果当前用户问题和历史上下文冲突，以当前用户问题为准。
+5. 如果工具结果和历史摘要冲突，以工具结果为准。
+6. 涉及生产命令时，只能作为排查建议展示，不允许描述为可以直接执行。
+7. 涉及重启、删除、清理、扩容、切换、回滚等高风险操作时，必须提示需要按生产变更流程审批。
+8. 输出需要包含日志证据和引用文档。
+9. 不要输出用户的敏感信息、token、密码、私钥、连接串。
+
+请按以下格式回答：
+
+## 异常摘要
+
+## 日志证据
+
+## 可能原因
+
+## 建议排查步骤
+
+## 风险提示
+
+## 知识库引用
+```
+
+---
+
+## 38. 上下文维护流程
+
+### 38.1 用户提问流程
+
+```text
+用户登录
+    ↓
+前端携带 JWT 请求 /api/qa/ask
+    ↓
+AuthMiddleware 解析当前用户
+    ↓
+校验 conversationId 是否属于当前用户
+    ↓
+保存用户问题到 conversation_message
+    ↓
+读取最近 6 到 10 轮对话
+    ↓
+读取 conversation_summary
+    ↓
+读取或创建 task_state
+    ↓
+执行知识库检索
+    ↓
+执行 LLM 重排
+    ↓
+组装 Prompt 上下文
+    ↓
+保存 context_snapshot
+    ↓
+调用默认 LLM
+    ↓
+保存 assistant 回答到 conversation_message
+    ↓
+保存 qa_record
+    ↓
+更新 conversation_summary
+    ↓
+更新 task_state
+    ↓
+返回答案和引用来源
+```
+
+---
+
+### 38.2 会话摘要更新规则
+
+触发条件：
+
+```text
+1. 当前 conversation_message 数量超过 10 条。
+2. 最近消息总 token 估算超过 3000。
+3. 每次日志分析或 K8s 诊断完成后。
+4. 用户明确切换话题时。
+```
+
+摘要内容必须包含：
+
+```text
+1. 用户正在解决的问题
+2. 已确认事实
+3. 已使用的知识库文档
+4. 已读取的日志或 K8s 上下文摘要
+5. 已给出的结论
+6. 待确认事项
+7. 风险提示
+8. 用户明确约束
+```
+
+摘要更新要求：
+
+```text
+1. 不要覆盖原始消息。
+2. 摘要只作为上下文压缩，不作为唯一事实来源。
+3. 摘要和当前工具结果冲突时，以当前工具结果为准。
+4. 摘要和当前用户问题冲突时，以当前用户问题为准。
+```
+
+---
+
+### 38.3 task_state 更新规则
+
+每次问答后，调用 LLM 或规则逻辑更新 task_state。
+
+task_state 更新 Prompt：
+
+```text
+你是一个运维排障任务状态维护助手。
+
+请根据当前用户问题、助手回答、知识库引用、日志证据和已有 task_state，更新任务状态。
+
+要求：
+1. 只提取已经明确出现的信息。
+2. 不要编造系统名、组件名、错误原因。
+3. 如果当前问题改变了方向，需要更新 current_topic。
+4. 保留已确认事实。
+5. 标记待确认事项。
+6. 输出 JSON，不要输出多余解释。
+
+已有 task_state：
+{{old_task_state}}
+
+当前用户问题：
+{{question}}
+
+助手回答：
+{{answer}}
+
+引用来源：
+{{citations}}
+
+工具结果摘要：
+{{tool_result_summary}}
+
+输出格式：
+{
+  "taskType": "",
+  "systemName": "",
+  "componentName": "",
+  "environment": "",
+  "problemSummary": "",
+  "knownFacts": [],
+  "checkedItems": [],
+  "currentConclusion": "",
+  "pendingQuestions": [],
+  "riskLevel": "low | medium | high | unknown",
+  "nextActions": []
+}
+```
+
+---
+
+## 39. 后端目录结构扩展
+
+在原有后端目录基础上增加：
+
+```text
+backend/
+  internal/
+    middleware/
+      auth.go
+      rbac.go
+
+    model/
+      user.go
+      login_audit.go
+      conversation.go
+      conversation_message.go
+      conversation_summary.go
+      task_state.go
+      tool_call_record.go
+      context_snapshot.go
+
+    handler/
+      auth_handler.go
+      user_handler.go
+      conversation_handler.go
+
+    service/
+      auth_service.go
+      user_service.go
+      conversation_service.go
+      context_service.go
+      prompt_builder_service.go
+      task_state_service.go
+
+    repository/
+      user_repository.go
+      conversation_repository.go
+      context_repository.go
+      task_state_repository.go
+
+    security/
+      password.go
+      jwt.go
+```
+
+职责说明：
+
+```text
+AuthService             登录、JWT 签发、修改密码
+UserService             用户增删改查、启用禁用、重置密码
+ConversationService     会话创建、查询、归档、消息保存
+ContextService          最近消息、摘要、任务状态、工具结果聚合
+PromptBuilderService    统一组装最终 LLM Prompt
+TaskStateService        创建和更新 task_state
+AuthMiddleware          校验 JWT
+RBACMiddleware          校验 admin / user 权限
+```
+
+---
+
+## 40. 前端目录结构扩展
+
+在原有前端目录基础上增加：
+
+```text
+frontend/
+  src/
+    api/
+      authApi.ts
+      userApi.ts
+      conversationApi.ts
+
+    pages/
+      LoginPage.tsx
+      UserManagePage.tsx
+      ConversationListPage.tsx
+
+    components/
+      auth/
+        LoginForm.tsx
+        RequireAuth.tsx
+        RoleGuard.tsx
+
+      user/
+        UserTable.tsx
+        UserFormDialog.tsx
+        ResetPasswordDialog.tsx
+
+      chat/
+        ConversationSidebar.tsx
+
+    stores/
+      authStore.ts
+```
+
+前端路由要求：
+
+```text
+1. 未登录用户只能访问 /login。
+2. 已登录用户访问 /login 时跳转到首页。
+3. 普通页面需要 RequireAuth。
+4. 用户管理页面需要 RoleGuard admin。
+5. Header 显示当前用户名和角色。
+6. 支持退出登录。
+```
+
+---
+
+## 41. API 权限控制要求
+
+所有接口默认需要登录，除了：
+
+```text
+GET /api/health
+POST /api/auth/login
+```
+
+admin 专属接口：
+
+```text
+POST   /api/users
+GET    /api/users
+PUT    /api/users/{id}
+POST   /api/users/{id}/reset-password
+
+POST   /api/documents/{id}/review
+POST   /api/llm-configs
+PUT    /api/llm-configs/{id}
+POST   /api/llm-configs/{id}/default
+
+POST   /api/log-sources
+PUT    /api/log-sources/{id}
+DELETE /api/log-sources/{id}
+
+POST   /api/k8s/clusters
+PUT    /api/k8s/clusters/{id}
+DELETE /api/k8s/clusters/{id}
+```
+
+普通用户可访问：
+
+```text
+GET    /api/documents
+GET    /api/documents/{id}
+POST   /api/documents/upload
+POST   /api/qa/ask
+GET    /api/conversations
+POST   /api/conversations
+GET    /api/conversations/{id}/messages
+DELETE /api/conversations/{id}
+POST   /api/logs/preview
+POST   /api/log-analysis
+POST   /api/k8s/diagnosis
+```
+
+数据归属规则：
+
+```text
+1. 普通用户只能查看自己的 conversation、qa_record、log_analysis_task、k8s_diagnosis_task。
+2. admin 可以查看全部。
+3. 普通用户不能修改其他用户的数据。
+4. 后端必须基于 JWT 中的 userId 判断归属，不相信前端传入的 userId。
+```
+
+---
+
+## 42. 安全要求补充
+
+在原安全要求基础上增加：
+
+```text
+1. 所有业务接口默认必须登录。
+2. 所有 admin 接口必须校验 role = admin。
+3. 密码必须使用 bcrypt 哈希存储。
+4. JWT_SECRET 必须从环境变量读取，不能硬编码。
+5. 普通用户不能访问其他用户的会话上下文。
+6. 普通用户不能查看其他用户的日志分析结果。
+7. 普通用户不能查看其他用户的 K8s 诊断结果。
+8. context_snapshot 中不得保存明文密码、token、私钥、连接串。
+9. LLM Prompt 中不得注入用户密码、JWT、日志源凭据、K8s 凭据。
+10. admin 禁用用户后，该用户不能继续登录。
+11. 禁止删除最后一个 admin。
+12. 禁止禁用最后一个 admin。
+```
+
+---
+
+## 43. 第一阶段 MVP 范围调整
+
+将原“可以暂缓”中的：
+
+```text
+用户登录
+权限管理
+```
+
+从暂缓项移除，并加入第一阶段必须实现。
+
+### 第一阶段必须实现
+
+```text
+1. React + shadcn/ui 前端基础页面
+2. Golang + Gin 后端服务
+3. PostgreSQL + pg_trgm 表结构
+4. 简化用户登录
+5. admin / user 两类角色
+6. admin 管理普通用户
+7. JWT 认证中间件
+8. 基础 RBAC 权限控制
+9. Markdown / TXT 文档上传
+10. 文档切片
+11. 检索增强信息入库
+12. 知识库问答
+13. 会话 conversation 管理
+14. 对话消息 conversation_message 保存
+15. 最近 6 到 10 轮上下文维护
+16. conversation_summary 会话摘要
+17. task_state 任务状态维护
+18. context_snapshot 上下文快照
+19. 可选 LLM 接口配置和调用
+20. 引用来源展示
+21. 文档质量检查
+22. Elasticsearch 日志源配置
+23. 服务器日志文件源配置
+24. 日志预览
+25. 基于日志和知识库的 LLM 分析
+```
+
+### 仍然可以暂缓
+
+```text
+1. PDF 解析
+2. MinIO
+3. 文档版本对比
+4. Wiki 自动同步
+5. 工单系统集成
+6. 日志长期归档
+7. 实时流式日志监控
+8. 自动化处置闭环
+9. 多租户复杂权限
+10. 细粒度系统权限
+11. 部门组织架构
+12. LDAP / OAuth / SSO
+```
+
+---
+
+## 44. Codex 开发任务拆分调整
+
+请在原 Task 3 之后插入以下任务。
+
+### Task 3.1：用户表和认证基础
+
+目标：
+
+```text
+实现 app_user、login_audit 表，支持初始化 admin 用户。
+```
+
+验收标准：
+
+```text
+1. migrations 中包含 app_user、login_audit 表。
+2. 后端启动时如果没有 admin，自动创建默认 admin。
+3. 密码使用 bcrypt 保存。
+4. 不允许保存明文密码。
+5. JWT_SECRET 从环境变量读取。
+```
+
+---
+
+### Task 3.2：登录接口和 JWT 中间件
+
+目标：
+
+```text
+实现 /api/auth/login、/api/auth/me、/api/auth/change-password。
+```
+
+验收标准：
+
+```text
+1. 用户可以使用 username + password 登录。
+2. 登录成功返回 accessToken 和用户信息。
+3. 登录失败写入 login_audit。
+4. 禁用用户不能登录。
+5. 受保护接口必须携带 Authorization: Bearer token。
+6. AuthMiddleware 可以解析当前用户。
+```
+
+---
+
+### Task 3.3：admin 用户管理
+
+目标：
+
+```text
+实现 admin 管理普通用户。
+```
+
+验收标准：
+
+```text
+1. admin 可以创建普通用户。
+2. admin 可以查询用户列表。
+3. admin 可以启用、禁用普通用户。
+4. admin 可以重置普通用户密码。
+5. 普通用户不能访问用户管理接口。
+6. 系统不允许禁用或删除最后一个 admin。
+```
+
+---
+
+### Task 3.4：会话和上下文表
+
+目标：
+
+```text
+实现 conversation、conversation_message、conversation_summary、task_state、tool_call_record、context_snapshot 表。
+```
+
+验收标准：
+
+```text
+1. migrations 中包含上述表。
+2. GORM model 与表结构对应。
+3. conversation 绑定 user_id。
+4. 普通用户只能访问自己的 conversation。
+5. admin 可以访问全部 conversation。
+```
+
+---
+
+### Task 3.5：ContextService 和 PromptBuilderService
+
+目标：
+
+```text
+实现上下文聚合和 Prompt 组装。
+```
+
+验收标准：
+
+```text
+1. 可以根据 user_id + conversation_id 读取最近 6 到 10 轮消息。
+2. 可以读取 conversation_summary。
+3. 可以读取 task_state。
+4. 可以合并知识库检索结果和工具结果摘要。
+5. 可以生成最终 LLM Prompt。
+6. LLM 调用前保存 context_snapshot。
+7. 敏感信息不会进入 Prompt。
+```
+
+---
+
+### Task 3.6：会话摘要和 task_state 更新
+
+目标：
+
+```text
+实现会话摘要和任务状态维护。
+```
+
+验收标准：
+
+```text
+1. 问答完成后可以更新 conversation_summary。
+2. 问答完成后可以更新 task_state。
+3. 日志分析完成后可以更新 task_state。
+4. 摘要不会覆盖原始消息。
+5. 当前问题优先于历史摘要。
+6. 工具结果优先于历史摘要。
+```
+
+---
+
+### Task 10 调整：前端问答页面
+
+原目标保持不变，增加：
+
+```text
+1. ChatPage 左侧展示当前用户的会话列表。
+2. 用户可以新建会话。
+3. 用户可以切换会话。
+4. 用户提问时携带 conversationId。
+5. 页面刷新后可以继续查看历史消息。
+6. 普通用户只能看到自己的会话。
+7. admin 可以查看全部会话或按用户筛选。
+```
+
+---
+
+### 新增 Task 10.1：前端登录和用户管理页面
+
+目标：
+
+```text
+实现 LoginPage、UserManagePage、RequireAuth、RoleGuard。
+```
+
+验收标准：
+
+```text
+1. 未登录用户访问业务页面会跳转到 /login。
+2. 登录成功后保存 token。
+3. Header 显示当前用户名和角色。
+4. 支持退出登录。
+5. admin 可以进入用户管理页面。
+6. 普通用户看不到用户管理入口。
+7. admin 可以新增、禁用、重置普通用户密码。
+```
+
+---
+
+## 45. 最终验收标准补充
+
+完成后，系统除原有能力外，还必须做到：
+
+```text
+1. 系统启动后自动初始化 admin 用户。
+2. 用户必须登录后才能使用系统。
+3. admin 可以创建和管理普通用户。
+4. 普通用户不能访问用户管理页面。
+5. 普通用户不能访问 admin 专属接口。
+6. 普通用户只能看到自己的会话和分析记录。
+7. admin 可以查看所有用户的会话和分析记录。
+8. 用户可以创建多个聊天会话。
+9. 每个会话可以保存多轮消息。
+10. 用户切换会话后，上下文不会混淆。
+11. 问答接口可以自动读取最近 6 到 10 轮消息。
+12. 系统可以维护 conversation_summary。
+13. 系统可以维护 task_state。
+14. 每次调用 LLM 前保存 context_snapshot。
+15. LLM Prompt 中包含当前用户、当前会话、最近消息、会话摘要、任务状态、知识库片段。
+16. 日志分析结果可以写入当前会话上下文。
+17. K8s 诊断结果可以写入当前会话上下文。
+18. 所有操作记录当前 user_id。
+19. 密码、token、私钥、连接串不会进入 LLM Prompt。
+20. 用户 A 的上下文不会泄露给用户 B。
+```

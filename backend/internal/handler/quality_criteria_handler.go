@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"ops-kb-rag/backend/internal/dto"
+	"ops-kb-rag/backend/internal/middleware"
 	"ops-kb-rag/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +33,7 @@ func (h *QualityCriteriaHandler) Create(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	item, err := h.service.Create(c.Request.Context(), req, c.GetHeader("X-User"))
+	item, err := h.service.Create(c.Request.Context(), req, middleware.CurrentUsername(c))
 	if err != nil {
 		dto.Error(c, 400, err.Error())
 		return

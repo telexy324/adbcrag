@@ -15,7 +15,8 @@ export async function askQuestion(data: {
   componentName?: string
   docType?: string
   topK?: number
+  conversationId?: number
 }) {
-  const response = await http.post<APIResponse<{ answer: string; citations: Citation[] }>>('/qa/ask', data)
+  const response = await http.post<APIResponse<{ answer: string; citations: Citation[]; conversationId: number; messageId: number }>>('/qa/ask', data)
   return response.data.data
 }

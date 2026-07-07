@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"ops-kb-rag/backend/internal/dto"
+	"ops-kb-rag/backend/internal/middleware"
 	"ops-kb-rag/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +33,7 @@ func (h *K8sHandler) CreateCluster(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	item, err := h.service.CreateCluster(c.Request.Context(), req, c.GetHeader("X-User"))
+	item, err := h.service.CreateCluster(c.Request.Context(), req, middleware.CurrentUsername(c))
 	if err != nil {
 		dto.Error(c, 400, err.Error())
 		return
@@ -91,7 +92,7 @@ func (h *K8sHandler) DiagnosePod(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	result, err := h.service.DiagnosePod(c.Request.Context(), req, c.GetHeader("X-User"))
+	result, err := h.service.DiagnosePod(c.Request.Context(), req, middleware.CurrentUsername(c))
 	if err != nil {
 		dto.Error(c, 400, err.Error())
 		return
@@ -105,7 +106,7 @@ func (h *K8sHandler) DiagnoseAlert(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	result, err := h.service.DiagnoseAlert(c.Request.Context(), req, c.GetHeader("X-User"))
+	result, err := h.service.DiagnoseAlert(c.Request.Context(), req, middleware.CurrentUsername(c))
 	if err != nil {
 		dto.Error(c, 400, err.Error())
 		return
@@ -119,7 +120,7 @@ func (h *K8sHandler) DiagnoseIngress(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	result, err := h.service.DiagnoseIngress(c.Request.Context(), req, c.GetHeader("X-User"))
+	result, err := h.service.DiagnoseIngress(c.Request.Context(), req, middleware.CurrentUsername(c))
 	if err != nil {
 		dto.Error(c, 400, err.Error())
 		return
@@ -133,7 +134,7 @@ func (h *K8sHandler) DiagnoseService(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	result, err := h.service.DiagnoseService(c.Request.Context(), req, c.GetHeader("X-User"))
+	result, err := h.service.DiagnoseService(c.Request.Context(), req, middleware.CurrentUsername(c))
 	if err != nil {
 		dto.Error(c, 400, err.Error())
 		return

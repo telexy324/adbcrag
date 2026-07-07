@@ -13,6 +13,8 @@ type QARecord struct {
 	RetrievedChunks datatypes.JSON `gorm:"type:jsonb" json:"retrievedChunks"`
 	ModelName       string         `gorm:"size:100" json:"modelName"`
 	CreatedBy       string         `gorm:"size:100" json:"createdBy"`
+	UserID          uint64         `gorm:"index" json:"userId"`
+	ConversationID  uint64         `gorm:"index" json:"conversationId"`
 	CreatedAt       time.Time      `json:"createdAt"`
 }
 

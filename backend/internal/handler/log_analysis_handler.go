@@ -2,6 +2,7 @@ package handler
 
 import (
 	"ops-kb-rag/backend/internal/dto"
+	"ops-kb-rag/backend/internal/middleware"
 	"ops-kb-rag/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -35,7 +36,7 @@ func (h *LogAnalysisHandler) Analyze(c *gin.Context) {
 		dto.Error(c, 400, err.Error())
 		return
 	}
-	result, err := h.service.Analyze(c.Request.Context(), req, c.GetHeader("X-User"))
+	result, err := h.service.Analyze(c.Request.Context(), req, middleware.CurrentUsername(c))
 	if err != nil {
 		dto.Error(c, 400, err.Error())
 		return

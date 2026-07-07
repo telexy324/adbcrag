@@ -33,6 +33,10 @@ type Config struct {
 	ESTimeoutSec    int
 	K8sLogTailLines int
 	K8sLogMaxBytes  int
+	InitAdminUser   string
+	InitAdminPass   string
+	JWTSecret       string
+	JWTExpireHours  int
 	LogLevel        string
 	LogFormat       string
 }
@@ -64,6 +68,10 @@ func Load() *Config {
 		ESTimeoutSec:    getEnvInt("ES_QUERY_TIMEOUT_SECONDS", 15),
 		K8sLogTailLines: getEnvInt("K8S_LOG_TAIL_LINES", 300),
 		K8sLogMaxBytes:  getEnvInt("K8S_LOG_MAX_BYTES", 262144),
+		InitAdminUser:   getEnv("INIT_ADMIN_USERNAME", "admin"),
+		InitAdminPass:   getEnv("INIT_ADMIN_PASSWORD", "Admin@123456"),
+		JWTSecret:       getEnv("JWT_SECRET", "dev-only-change-me-jwt-secret"),
+		JWTExpireHours:  getEnvInt("JWT_EXPIRE_HOURS", 24),
 		LogLevel:        getEnv("LOG_LEVEL", "info"),
 		LogFormat:       getEnv("LOG_FORMAT", "json"),
 	}

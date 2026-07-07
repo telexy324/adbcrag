@@ -29,7 +29,10 @@ func main() {
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
 		fatal("enable pg_trgm", err)
 	}
-	if err := db.AutoMigrate(&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}, &model.LLMConfig{}, &model.K8sCluster{}, &model.K8sDiagnosisTask{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.AppUser{}, &model.LoginAudit{}, &model.Conversation{}, &model.ConversationMessage{}, &model.ConversationSummary{}, &model.TaskState{}, &model.ToolCallRecord{}, &model.ContextSnapshot{},
+		&model.KBDocument{}, &model.KBChunk{}, &model.QARecord{}, &model.KBReviewRecord{}, &model.QualityCriteria{}, &model.LogSource{}, &model.LogAnalysisTask{}, &model.LLMConfig{}, &model.K8sCluster{}, &model.K8sDiagnosisTask{},
+	); err != nil {
 		fatal("auto migrate", err)
 	}
 	if err := ensureSearchIndexes(db); err != nil {
@@ -46,17 +49,24 @@ func main() {
 	llmConfigRepo := repository.NewLLMConfigRepository(db)
 	k8sClusterRepo := repository.NewK8sClusterRepository(db)
 	k8sDiagnosisRepo := repository.NewK8sDiagnosisRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	conversationRepo := repository.NewConversationRepository(db)
 	credentialCrypto := security.NewCredentialCrypto(cfg.CredentialKey)
 	esClient := client.NewElasticsearchClient()
 	sshClient := client.NewSSHLogClient()
 	k8sClient := client.NewK8sClient()
 	llmConfigSvc := service.NewLLMConfigService(cfg, llmConfigRepo, credentialCrypto)
 	llmClient := service.NewDynamicLLMClient(llmConfigSvc)
+	authSvc := service.NewAuthService(cfg, userRepo)
+	if err := authSvc.EnsureAdmin(context.Background()); err != nil {
+		fatal("ensure admin user", err)
+	}
+	conversationSvc := service.NewConversationService(conversationRepo)
 
 	documentSvc := service.NewDocumentService(
 		cfg, docRepo, chunkRepo, service.NewParserService(), service.NewChunkService(), service.NewQualityService(llmClient), service.NewRetrievalMetadataService(llmClient),
 	)
-	ragSvc := service.NewRAGService(cfg, chunkRepo, qaRepo, llmClient)
+	ragSvc := service.NewRAGService(cfg, chunkRepo, qaRepo, llmClient, conversationSvc)
 	reviewSvc := service.NewReviewService(docRepo, reviewRepo)
 	criteriaSvc := service.NewQualityCriteriaService(criteriaRepo)
 	logSourceSvc := service.NewLogSourceService(cfg, logSourceRepo, credentialCrypto, esClient, sshClient)
@@ -71,6 +81,9 @@ func main() {
 		LogAnalysis:     handler.NewLogAnalysisHandler(logAnalysisSvc),
 		LLMConfig:       handler.NewLLMConfigHandler(llmConfigSvc),
 		K8s:             handler.NewK8sHandler(k8sSvc),
+		Auth:            handler.NewAuthHandler(authSvc),
+		Conversation:    handler.NewConversationHandler(conversationSvc),
+		AuthService:     authSvc,
 	})
 	logger.Info(context.Background(), "server listening", "port", cfg.AppPort, "env", cfg.AppEnv, "log_level", cfg.LogLevel, "log_format", cfg.LogFormat)
 	if err := r.Run(":" + cfg.AppPort); err != nil {
