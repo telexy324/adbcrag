@@ -25,6 +25,15 @@ func (h *LLMConfigHandler) List(c *gin.Context) {
 	dto.Success(c, items)
 }
 
+func (h *LLMConfigHandler) Active(c *gin.Context) {
+	result, err := h.service.Active(c.Request.Context())
+	if err != nil {
+		dto.Error(c, 500, err.Error())
+		return
+	}
+	dto.Success(c, result)
+}
+
 func (h *LLMConfigHandler) Create(c *gin.Context) {
 	var req dto.SaveLLMConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

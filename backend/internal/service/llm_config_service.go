@@ -11,6 +11,8 @@ import (
 	"ops-kb-rag/backend/internal/model"
 	"ops-kb-rag/backend/internal/repository"
 	"ops-kb-rag/backend/internal/security"
+
+	"gorm.io/gorm"
 )
 
 type LLMConfigService struct {
@@ -65,6 +67,28 @@ func (s *LLMConfigService) SetDefault(ctx context.Context, id uint64) (*model.LL
 	return s.repo.SetDefault(ctx, id)
 }
 
+func (s *LLMConfigService) Active(ctx context.Context) (*dto.ActiveLLMConfigResponse, error) {
+	item, err := s.repo.GetDefault(ctx)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return &dto.ActiveLLMConfigResponse{
+				UsingFallback: true, Name: "环境变量 DeepSeek", Provider: model.LLMProviderDeepSeek,
+				BaseURL: s.cfg.DeepSeekBaseURL, Model: s.cfg.DeepSeekModel, Enabled: true,
+				Message: "未配置默认模型接口，当前回退使用 DEEPSEEK_* 环境变量",
+			}, nil
+		}
+		return nil, err
+	}
+	message := "当前使用数据库中设置的默认模型接口"
+	if !item.Enabled {
+		message = "当前默认模型接口已禁用，调用时会报错，不会静默回退 DeepSeek"
+	}
+	return &dto.ActiveLLMConfigResponse{
+		UsingFallback: false, Name: item.Name, Provider: item.Provider, BaseURL: item.BaseURL,
+		Model: item.Model, Enabled: item.Enabled, Message: message,
+	}, nil
+}
+
 func (s *LLMConfigService) Test(ctx context.Context, id uint64, prompt string) (*dto.TestLLMConfigResponse, error) {
 	item, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -84,15 +108,22 @@ func (s *LLMConfigService) Test(ctx context.Context, id uint64, prompt string) (
 	return &dto.TestLLMConfigResponse{OK: true, Message: "连接成功", Content: resp.Content}, nil
 }
 
-func (s *LLMConfigService) DefaultClient(ctx context.Context) (client.DeepSeekClient, string) {
+func (s *LLMConfigService) DefaultClient(ctx context.Context) (client.DeepSeekClient, string, error) {
 	item, err := s.repo.GetDefault(ctx)
-	if err == nil {
-		llm, err := s.clientForConfig(item)
-		if err == nil {
-			return llm, item.Model
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return client.NewOpenAICompatibleLLMClient("deepseek", s.cfg.DeepSeekBaseURL, s.cfg.DeepSeekAPIKey, s.cfg.DeepSeekModel), s.cfg.DeepSeekModel, nil
 		}
+		return nil, "", fmt.Errorf("读取默认模型配置失败: %w", err)
 	}
-	return client.NewOpenAICompatibleLLMClient("deepseek", s.cfg.DeepSeekBaseURL, s.cfg.DeepSeekAPIKey, s.cfg.DeepSeekModel), s.cfg.DeepSeekModel
+	if !item.Enabled {
+		return nil, "", fmt.Errorf("默认模型接口「%s」已禁用，请启用后再使用", item.Name)
+	}
+	llm, err := s.clientForConfig(item)
+	if err != nil {
+		return nil, "", fmt.Errorf("默认模型接口「%s」不可用: %w", item.Name, err)
+	}
+	return llm, item.Model, nil
 }
 
 func (s *LLMConfigService) clientForConfig(item *model.LLMConfig) (client.DeepSeekClient, error) {
@@ -173,7 +204,10 @@ func NewDynamicLLMClient(service *LLMConfigService) *DynamicLLMClient {
 }
 
 func (c *DynamicLLMClient) Chat(ctx context.Context, messages []client.ChatMessage) (*client.ChatResponse, error) {
-	llm, modelName := c.service.DefaultClient(ctx)
+	llm, modelName, err := c.service.DefaultClient(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := llm.Chat(ctx, messages)
 	if err != nil {
 		return nil, err

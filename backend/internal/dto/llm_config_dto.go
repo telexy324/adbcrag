@@ -21,3 +21,13 @@ type TestLLMConfigResponse struct {
 	Message string `json:"message"`
 	Content string `json:"content,omitempty"`
 }
+
+type ActiveLLMConfigResponse struct {
+	UsingFallback bool   `json:"usingFallback"`
+	Name          string `json:"name"`
+	Provider      string `json:"provider"`
+	BaseURL       string `json:"baseUrl"`
+	Model         string `json:"model"`
+	Enabled       bool   `json:"enabled"`
+	Message       string `json:"message"`
+}

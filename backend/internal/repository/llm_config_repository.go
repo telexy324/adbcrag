@@ -32,7 +32,7 @@ func (r *LLMConfigRepository) GetByID(ctx context.Context, id uint64) (*model.LL
 
 func (r *LLMConfigRepository) GetDefault(ctx context.Context) (*model.LLMConfig, error) {
 	var item model.LLMConfig
-	if err := r.db.WithContext(ctx).Where("enabled = ? AND is_default = ?", true, true).First(&item).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("is_default = ?", true).First(&item).Error; err != nil {
 		return nil, err
 	}
 	return &item, nil

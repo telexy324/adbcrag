@@ -69,6 +69,7 @@ func New(handlers Handlers) *gin.Engine {
 	admin.DELETE("/log-sources/:id", handlers.LogSource.Delete)
 	admin.POST("/log-sources/:id/test", handlers.LogSource.Test)
 	admin.GET("/llm-configs", handlers.LLMConfig.List)
+	admin.GET("/llm-configs/default", handlers.LLMConfig.Active)
 	admin.POST("/llm-configs", handlers.LLMConfig.Create)
 	admin.PUT("/llm-configs/:id", handlers.LLMConfig.Update)
 	admin.DELETE("/llm-configs/:id", handlers.LLMConfig.Delete)

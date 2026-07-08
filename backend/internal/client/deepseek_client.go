@@ -22,6 +22,16 @@ type ChatRequest struct {
 	Temperature float64       `json:"temperature"`
 }
 
+type QwenChatRequest struct {
+	Stream             bool           `json:"stream"`
+	AppKey             string         `json:"app_key,omitempty"`
+	AppSecret          string         `json:"app_secret,omitempty"`
+	Model              string         `json:"model"`
+	Messages           []ChatMessage  `json:"messages"`
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs"`
+	Temperature        float64        `json:"temperature"`
+}
+
 type ChatResponse struct {
 	Content string
 	Model   string
@@ -60,8 +70,8 @@ func NewOpenAICompatibleLLMClientWithSecret(provider, baseURL, apiKey, apiSecret
 }
 
 func (c *OpenAICompatibleDeepSeekClient) Chat(ctx context.Context, messages []ChatMessage) (*ChatResponse, error) {
-	body, _ := json.Marshal(ChatRequest{Model: c.model, Messages: messages, Temperature: 0.2})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	body, _ := json.Marshal(c.requestBody(messages))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatCompletionsURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -94,4 +104,21 @@ func (c *OpenAICompatibleDeepSeekClient) Chat(ctx context.Context, messages []Ch
 		return nil, fmt.Errorf("%s response has no choices", c.provider)
 	}
 	return &ChatResponse{Content: parsed.Choices[0].Message.Content, Model: c.model}, nil
+}
+
+func (c *OpenAICompatibleDeepSeekClient) requestBody(messages []ChatMessage) any {
+	if c.provider == "qwen3" {
+		return QwenChatRequest{
+			Stream: false, AppKey: c.apiKey, AppSecret: c.apiSecret, Model: c.model, Messages: messages,
+			ChatTemplateKwargs: map[string]any{"enable_thinking": false}, Temperature: 0.3,
+		}
+	}
+	return ChatRequest{Model: c.model, Messages: messages, Temperature: 0.2}
+}
+
+func (c *OpenAICompatibleDeepSeekClient) chatCompletionsURL() string {
+	if strings.HasSuffix(c.baseURL, "/chat/completions") {
+		return c.baseURL
+	}
+	return c.baseURL + "/chat/completions"
 }
