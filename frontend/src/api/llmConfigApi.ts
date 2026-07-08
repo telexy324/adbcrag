@@ -26,8 +26,23 @@ export type SaveLLMConfigInput = {
   enabled?: boolean
 }
 
+export type ActiveLLMConfig = {
+  usingFallback: boolean
+  name: string
+  provider: LLMProvider
+  baseUrl: string
+  model: string
+  enabled: boolean
+  message: string
+}
+
 export async function listLLMConfigs() {
   const { data } = await http.get<APIResponse<LLMConfig[]>>('/llm-configs')
+  return data.data
+}
+
+export async function getActiveLLMConfig() {
+  const { data } = await http.get<APIResponse<ActiveLLMConfig>>('/llm-configs/default')
   return data.data
 }
 

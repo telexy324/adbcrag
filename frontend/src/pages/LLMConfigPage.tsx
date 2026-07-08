@@ -4,6 +4,7 @@ import { Check, Pencil, PlugZap, Save, Star, Trash2 } from 'lucide-react'
 import {
   createLLMConfig,
   deleteLLMConfig,
+  getActiveLLMConfig,
   listLLMConfigs,
   LLMConfig,
   LLMProvider,
@@ -30,8 +31,8 @@ type FormState = {
 }
 
 const presets: Record<LLMProvider, Pick<FormState, 'baseUrl' | 'model'>> = {
-  deepseek: { baseUrl: 'http://deepseek-v4.internal.local/v1', model: 'deepseek-v4' },
-  qwen3: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3' },
+ deepseek: { baseUrl: 'http://deepseek-v4.internal.local/v1', model: 'deepseek-v4' },
+  qwen3: { baseUrl: 'http://<IP>:<Port>/Qwen3-32B/v1', model: 'Qwen3-32B' },
   openai_compatible: { baseUrl: '', model: '' },
 }
 
@@ -52,6 +53,7 @@ export function LLMConfigPage() {
   const [form, setForm] = useState<FormState>(emptyForm)
   const [message, setMessage] = useState('')
   const { data = [] } = useQuery({ queryKey: ['llm-configs'], queryFn: listLLMConfigs })
+  const { data: activeConfig } = useQuery({ queryKey: ['llm-configs', 'default'], queryFn: getActiveLLMConfig })
 
   const saveMutation = useMutation({
     mutationFn: (value: FormState) => {
@@ -72,12 +74,16 @@ export function LLMConfigPage() {
       setForm(emptyForm)
       setMessage('已保存')
       queryClient.invalidateQueries({ queryKey: ['llm-configs'] })
+      queryClient.invalidateQueries({ queryKey: ['llm-configs', 'default'] })
     },
     onError: (err) => setMessage(err instanceof Error ? err.message : '保存失败'),
   })
   const defaultMutation = useMutation({
     mutationFn: setDefaultLLMConfig,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['llm-configs'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['llm-configs'] })
+      queryClient.invalidateQueries({ queryKey: ['llm-configs', 'default'] })
+    },
   })
   const deleteMutation = useMutation({
     mutationFn: deleteLLMConfig,
@@ -117,6 +123,19 @@ export function LLMConfigPage() {
   return (
     <div className="space-y-5">
       <h1 className="text-xl font-semibold">模型接口</h1>
+      {activeConfig && (
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">当前实际默认模型：{providerName(activeConfig.provider)} · {activeConfig.model}</div>
+              <div className="mt-1 text-xs text-slate-500">{activeConfig.name} · {activeConfig.baseUrl}</div>
+            </div>
+            <div className={`rounded-md px-2 py-1 text-xs ${activeConfig.usingFallback ? 'bg-amber-50 text-amber-800' : activeConfig.enabled ? 'bg-teal-50 text-teal-800' : 'bg-red-50 text-red-700'}`}>
+              {activeConfig.message}
+            </div>
+          </div>
+        </Card>
+      )}
       <div className="grid gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <Card className="p-5">
           <form className="grid gap-4" onSubmit={submit}>
@@ -130,10 +149,10 @@ export function LLMConfigPage() {
               <option value="deepseek">DeepSeek</option>
               <option value="openai_compatible">OpenAI Compatible</option>
             </Select>
-            <Input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="Base URL，例如 /v1 上一级地址" required />
+            <Input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="Base URL，例如 http://IP:Port/Qwen3-32B/v1" required />
             <Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder="模型名，如 qwen3-plus" required />
-            <Input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={form.id ? 'API Key 不填则保持不变' : 'API Key'} />
-            <Input type="password" value={form.apiSecret} onChange={(e) => setForm({ ...form, apiSecret: e.target.value })} placeholder={form.id ? 'API Secret 不填则保持不变' : 'API Secret'} />
+            <Input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={form.id ? 'API Key / app_key 不填则保持不变' : 'API Key / app_key'} />
+            <Input type="password" value={form.apiSecret} onChange={(e) => setForm({ ...form, apiSecret: e.target.value })} placeholder={form.id ? 'API Secret / app_secret 不填则保持不变' : 'API Secret / app_secret'} />
             <Input type="number" step="0.1" min="0" max="2" value={form.temperature} onChange={(e) => setForm({ ...form, temperature: Number(e.target.value) })} placeholder="Temperature" />
             <div className="flex flex-wrap gap-4 text-sm text-slate-700">
               <label className="inline-flex items-center gap-2">
